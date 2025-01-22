@@ -34,11 +34,21 @@ PLANS: Dict[str, Dict] = {}
 
 # 1) Prompt for the very first user message to detect language
 INITIAL_SYSTEM_PROMPT = """
-You are a friendly, human-like coach. The user just wrote something in an unknown language.
-1) Figure out which language they're using.
-2) Respond briefly IN THAT LANGUAGE with a warm greeting, then politely ask them to confirm or specify which language they'd like to use for the rest of the conversation.
-3) Keep it short.
-4) Do not mention that you are analyzing their language; just do it naturally.
+You are a friendly, human-like diet and nutrition coach. The user just wrote their first message.
+
+1) Detect which language they're using (French or English).
+2) Respond IN THE SAME LANGUAGE with:
+   - A warm greeting
+   - A brief mention that you're a diet/nutrition coach
+   - Ask them to confirm if they want to continue in French or English
+
+Keep it natural and friendly. Don't mention that you're detecting their language.
+
+Example if they write in French:
+"Bonjour ! Je suis votre coach en nutrition. Souhaitez-vous que nous continuions en français ou en anglais ?"
+
+Example if they write in English:
+"Hello! I'm your nutrition coach. Would you like us to continue in French or English?"
 """
 
 # 2) Prompt to ask the user about which areas they'd like to focus on
@@ -125,10 +135,10 @@ def _summary_from_convo(messages: List[Dict[str, str]]) -> str:
     last3 = user_texts[-3:]
     return " | ".join(last3)
 
-def _call_gpt(system_prompt: str, user_messages: List[Dict[str, str]], temperature=0.7, max_tokens=200):
+async def _call_gpt(system_prompt: str, user_messages: List[Dict[str, str]], temperature=0.7, max_tokens=200):
     """Generic helper to call GPT with a system prompt plus user messages."""
     messages_for_gpt = [{"role": "system", "content": system_prompt}] + user_messages
-    response = openai.ChatCompletion.create(
+    response = await openai.ChatCompletion.acreate(
         model="gpt-3.5-turbo",
         messages=messages_for_gpt,
         temperature=temperature,
@@ -140,7 +150,7 @@ def _call_gpt(system_prompt: str, user_messages: List[Dict[str, str]], temperatu
 # Existing Functions for Different Steps
 ########################
 
-def ask_openai_first_response(user_id: str, user_text: str) -> str:
+async def ask_openai_first_response(user_id: str, user_text: str) -> str:
     """
     The first user message. Detect language, respond in that language, 
     ask for confirmation. Keep it short.
@@ -148,7 +158,7 @@ def ask_openai_first_response(user_id: str, user_text: str) -> str:
     try:
         _add_msg(user_id, "user", user_text)
         chat_input = [{"role": "user", "content": user_text}]
-        assistant_text = _call_gpt(INITIAL_SYSTEM_PROMPT, chat_input)
+        assistant_text = await _call_gpt(INITIAL_SYSTEM_PROMPT, chat_input)
 
         _add_msg(user_id, "assistant", assistant_text)
 
@@ -162,13 +172,13 @@ def ask_openai_first_response(user_id: str, user_text: str) -> str:
         logger.error(f"Error in ask_openai_first_response for {user_id}: {e}")
         return "Sorry, something went wrong."
 
-def get_areas_message_in_language(user_language: str) -> str:
+async def get_areas_message_in_language(user_language: str) -> str:
     """
     Calls GPT with AREAS_SYSTEM_PROMPT to produce the bullet-list text in the user's chosen language.
     """
     try:
         chat_input = [{"role": "user", "content": f"Language: {user_language}"}]
-        output = _call_gpt(
+        output = await _call_gpt(
             AREAS_SYSTEM_PROMPT,
             chat_input,
             temperature=0.3,
@@ -182,7 +192,7 @@ def get_areas_message_in_language(user_language: str) -> str:
             "- Personal Development\n- Health & Wellness\n- Professional Growth\n- Relationships\n- Lifestyle\n"
         )
 
-def generate_plan_for_areas(user_id: str, user_language: str, user_areas: str):
+async def generate_plan_for_areas(user_id: str, user_language: str, user_areas: str):
     """
     Calls GPT to produce exactly 5 short coaching questions in user_language 
     based on the user's chosen areas. 
@@ -191,7 +201,7 @@ def generate_plan_for_areas(user_id: str, user_language: str, user_areas: str):
     try:
         user_content = f"User language: {user_language}\nUser areas: {user_areas}\n"
         chat_input = [{"role": "user", "content": user_content}]
-        plan_text = _call_gpt(PLAN_SYSTEM_PROMPT, chat_input, temperature=0.5, max_tokens=200)
+        plan_text = await _call_gpt(PLAN_SYSTEM_PROMPT, chat_input, temperature=0.5, max_tokens=200)
 
         # Naive split by newline for bullet points
         lines = plan_text.strip().split("\n")
@@ -220,7 +230,7 @@ def generate_plan_for_areas(user_id: str, user_language: str, user_areas: str):
             "index": 0
         }
 
-def ask_openai_normal(user_id: str, user_text: str) -> str:
+async def ask_openai_normal(user_id: str, user_text: str) -> str:
     """
     Normal conversation (state='active'). 
     Uses MAIN_SYSTEM_PROMPT with the user's summary and language.
@@ -231,14 +241,14 @@ def ask_openai_normal(user_id: str, user_text: str) -> str:
 
         user_record = get_user(user_id) or {}
         user_summary = user_record.get("conversation_summary", {}).get("summary", "")
-        user_language = user_record.get("language", "English")
+        user_language = user_record.get("language", "français")
 
         system_prompt = MAIN_SYSTEM_PROMPT.format(
             summary=user_summary,
             user_language=user_language
         )
 
-        assistant_text = _call_gpt(
+        assistant_text = await _call_gpt(
             system_prompt,
             recent_messages,
             temperature=0.7,
@@ -260,249 +270,6 @@ def ask_openai_normal(user_id: str, user_text: str) -> str:
 # New Functions for Enhanced Discovery & Planning
 ########################
 
-def ask_openai_discovery(user_id: str, user_text: str) -> str:
-    """
-    A "discovery" conversation step to gather deeper personal info:
-    e.g., age, background, daily routine, environment, etc.
-    """
-    try:
-        _add_msg(user_id, "user", user_text)
-        recent_messages = _recent_msgs(user_id, limit=5)
-
-        user_record = get_user(user_id) or {}
-        user_summary = user_record.get("conversation_summary", {}).get("summary", "")
-        user_language = user_record.get("language", "English")
-
-        # Format the discovery prompt
-        system_prompt = DISCOVERY_SYSTEM_PROMPT.format(user_language=user_language)
-
-        assistant_text = _call_gpt(
-            system_prompt,
-            recent_messages,
-            temperature=0.7,
-            max_tokens=120
-        )
-
-        _add_msg(user_id, "assistant", assistant_text)
-
-        # Update the summary in the DB
-        updated_summary = _summary_from_convo(CONVERSATIONS[user_id])
-        update_user_summary(user_id, {"summary": updated_summary})
-
-        return assistant_text
-
-    except Exception as e:
-        logger.error(f"Error in ask_openai_discovery for {user_id}: {e}")
-        return "Sorry, something went wrong while discovering more about you."
-
-def generate_multi_horizon_plan(user_id: str, user_goals: str) -> str:
-    """
-    Creates a short-, medium-, and long-term plan based on the user's goals 
-    and personal details.
-    """
-    try:
-        user_record = get_user(user_id) or {}
-        user_language = user_record.get("language", "English")
-
-        # Build user content with goals and possibly existing summary
-        user_content = f"User language: {user_language}\nUser goals: {user_goals}\n"
-        summary = user_record.get("conversation_summary", {}).get("summary", "")
-        if summary:
-            user_content += f"Additional user context: {summary}\n"
-
-        chat_input = [{"role": "user", "content": user_content}]
-
-        system_prompt = PLANNING_SYSTEM_PROMPT.format(user_language=user_language)
-
-        plan_text = _call_gpt(
-            system_prompt,
-            chat_input,
-            temperature=0.7,
-            max_tokens=300
-        )
-
-        # Optionally store this text in your DB or in PLANS[user_id]
-        return plan_text
-
-    except Exception as e:
-        logger.error(f"Error generating multi-horizon plan for user {user_id}: {e}")
-        return ("I'm sorry, I had trouble generating a detailed plan right now. "
-                "Please try again later or provide more details.")
-    
-import json
-
-def parse_user_details_from_text(user_id: str, user_text: str) -> dict:
-    """
-    Call GPT to parse user_text for personal details like age, location, gender, routine, etc.
-    Returns a dictionary with keys: "age", "gender", "location", "routine", "interests", "other".
-    If nothing is found, the values can be empty strings.
-    """
-    try:
-        # We create a system prompt to instruct GPT to ONLY return valid JSON
-        system_prompt = """
-You are an information extraction engine. The user wrote the text below.
-Extract any personal details such as age, gender, location, daily routine, personal interests, or other relevant info.
-Return a JSON object with exactly these fields: "age", "gender", "location", "routine", "interests", "other".
-If any field is not mentioned by the user, use an empty string or a short description.
-
-ONLY return valid JSON. Do not include any extra text or explanation.
-"""
-
-        # We'll treat user_text as the 'user' message
-        user_message = [{"role": "user", "content": user_text}]
-
-        # Call GPT with a tight max_tokens
-        gpt_response = _call_gpt(
-            system_prompt=system_prompt,
-            user_messages=user_message,
-            temperature=0.3,
-            max_tokens=200
-        )
-        
-        # Attempt to parse JSON
-        details_dict = json.loads(gpt_response)
-        
-        # Make sure it has the expected keys
-        for key in ["age", "gender", "location", "routine", "interests", "other"]:
-            if key not in details_dict:
-                details_dict[key] = ""
-        
-        return details_dict
-
-    except Exception as e:
-        logger.error(f"Error parsing user details for {user_id}: {e}")
-        # Return empty structure if there's a problem
-        return {
-            "age": "",
-            "gender": "",
-            "location": "",
-            "routine": "",
-            "interests": "",
-            "other": ""
-        }
-# Discovery Prompt: Life coaching focus
-DISCOVERY_SYSTEM_PROMPT = """
-You are an empathetic life coach who helps people understand their life goals and aspirations.
-You must always speak in {user_language} and keep your messages conversational.
-
-Current context about the user:
-- Life Vision: {life_vision}
-- Age: {age}
-- Current Situation: {current_situation}
-- Key Challenges: {challenges}
-
-Based on their life vision:
-1. If seeking purpose: Ask about their values, passions, and what gives them meaning
-2. If career growth: Explore their skills, interests, and ideal work environment
-3. If personal growth: Discuss their self-development goals and learning aspirations
-4. If life balance: Understand their priorities and what balance means to them
-
-Keep your tone warm and supportive. Ask ONE thoughtful question at a time.
-If you don't have some information above, explore it naturally.
-
-Remember:
-- Focus on understanding their deeper motivations
-- Help them reflect on their life journey
-- Keep responses under 100 words
-- Ask open-ended questions that encourage self-reflection
-"""
-
-# Main Prompt: Life coaching context
-MAIN_SYSTEM_PROMPT = """
-You are an insightful life coach helping people navigate their life journey. Here's what you know about the person:
-
-PERSONAL CONTEXT:
-- Age: {age}
-- Life Stage: {life_stage}
-- Location: {location}
-- Life Vision: {life_vision}
-- Key Challenges: {challenges}
-- Current Situation: {current_situation}
-- Aspirations: {aspirations}
-
-CONVERSATION HISTORY:
-{summary}
-
-COACHING GUIDELINES:
-1. Always respond in {user_language}
-2. Keep responses concise but meaningful
-3. Reference their personal context when relevant
-4. Show you understand their journey
-5. Help them reflect on their choices and decisions
-6. For purpose-seeking: Guide them to explore their values
-7. For personal growth: Help them identify learning opportunities
-8. For life transitions: Support them in managing change
-
-Focus on:
-- Deeper understanding of their motivations
-- Identifying patterns in their life story
-- Connecting their past experiences to future aspirations
-- Encouraging self-reflection and awareness
-
-Don't mention being AI or reference this context directly.
-Ask thoughtful questions that promote personal insight.
-"""
-
-def parse_user_details_from_text(user_id: str, user_text: str) -> dict:
-    """
-    Enhanced parser to extract life-focused personal details.
-    """
-    try:
-        system_prompt = """
-You are an empathetic listener analyzing someone's life story. Extract key personal details.
-If the text is in French or another language, translate the information but keep original quotes.
-
-Return a JSON object with these fields:
-{
-    "age": "35",  // Extract number only, or "" if not found
-    "life_stage": "", // E.g., "career transition", "starting family", "retirement"
-    "location": "", // City/country if mentioned
-    "current_situation": "", // Work, life circumstances, key activities
-    "aspirations": [], // List of hopes, dreams, goals
-    "challenges": [], // List of current difficulties or obstacles
-    "life_vision": "", // Their ideal future or life direction
-    "values": [] // What matters most to them
-}
-
-Examples of insight detection:
-- "Je veux trouver un sens à ma vie" → life_vision: "seeking purpose and meaning"
-- "I feel stuck in my career" → challenges: ["career stagnation"]
-- "I dream of making a difference" → aspirations: ["creating positive impact"]
-
-ONLY return valid JSON. No other text."""
-
-        user_message = [{"role": "user", "content": user_text}]
-        
-        gpt_response = _call_gpt(
-            system_prompt=system_prompt,
-            user_messages=user_message,
-            temperature=0.3,
-            max_tokens=200
-        )
-        
-        details_dict = json.loads(gpt_response)
-        
-        # Ensure all required keys exist
-        required_keys = ["age", "life_stage", "location", "current_situation", "aspirations", "challenges", "life_vision", "values"]
-        for key in required_keys:
-            if key not in details_dict:
-                details_dict[key] = "" if key not in ["aspirations", "challenges", "values"] else []
-        
-        return details_dict
-
-    except Exception as e:
-        logger.error(f"Error parsing user details for {user_id}: {e}")
-        return {
-            "age": "",
-            "life_stage": "",
-            "location": "",
-            "current_situation": "",
-            "aspirations": [],
-            "challenges": [],
-            "life_vision": "",
-            "values": []
-        }
-
 async def ask_openai_discovery(user_id: str, user_text: str) -> str:
     """
     Life-focused discovery conversation to understand the person's journey.
@@ -513,10 +280,14 @@ async def ask_openai_discovery(user_id: str, user_text: str) -> str:
 
         # Get user record and parse details
         user_record = get_user(user_id) or {}
-        user_language = user_record.get("language", "English")
+        user_language = user_record.get("language", "français")
         
         # Parse new details from the current message
-        new_details = parse_user_details_from_text(user_id, user_text)
+        try:
+            new_details = await parse_user_details_from_text(user_id, user_text)
+        except Exception as e:
+            logger.error(f"Error parsing details in discovery: {e}")
+            new_details = {}
         
         # Merge with existing details from user record
         existing_details = user_record.get("user_details", {})
@@ -531,7 +302,7 @@ async def ask_openai_discovery(user_id: str, user_text: str) -> str:
             challenges=", ".join(merged_details.get("challenges", []))
         )
 
-        assistant_text = _call_gpt(
+        assistant_text = await _call_gpt(
             system_prompt,
             recent_messages,
             temperature=0.7,
@@ -553,6 +324,82 @@ async def ask_openai_discovery(user_id: str, user_text: str) -> str:
         logger.error(f"Error in ask_openai_discovery for {user_id}: {e}")
         return "I'd love to understand more about your life journey. Could you tell me what brings you here today?"
 
+async def generate_multi_horizon_plan(user_id: str, user_goals: str) -> str:
+    """
+    Creates a short-, medium-, and long-term plan based on the user's goals 
+    and personal details.
+    """
+    try:
+        user_record = get_user(user_id) or {}
+        user_language = user_record.get("language", "français")
+
+        # Build user content with goals and possibly existing summary
+        user_content = f"User language: {user_language}\nUser goals: {user_goals}\n"
+        summary = user_record.get("conversation_summary", {}).get("summary", "")
+        if summary:
+            user_content += f"Additional user context: {summary}\n"
+
+        chat_input = [{"role": "user", "content": user_content}]
+
+        system_prompt = PLANNING_SYSTEM_PROMPT.format(user_language=user_language)
+
+        plan_text = await _call_gpt(
+            system_prompt,
+            chat_input,
+            temperature=0.7,
+            max_tokens=300
+        )
+
+        return plan_text
+
+    except Exception as e:
+        logger.error(f"Error generating multi-horizon plan for user {user_id}: {e}")
+        return ("I'm sorry, I had trouble generating a detailed plan right now. "
+                "Please try again later or provide more details.")
+
+async def parse_user_details_from_text(user_id: str, user_text: str) -> dict:
+    """
+    Call GPT to parse user_text for personal details.
+    Returns a dictionary with extracted information.
+    """
+    try:
+        system_prompt = """
+You are an information extraction engine. The user wrote the text below.
+Extract any personal details such as age, gender, location, daily routine, personal interests, or other relevant info.
+Return a JSON object with exactly these fields: "age", "gender", "location", "routine", "interests", "other".
+If any field is not mentioned by the user, use an empty string or a short description.
+
+ONLY return valid JSON. Do not include any extra text or explanation.
+"""
+        user_message = [{"role": "user", "content": user_text}]
+        
+        gpt_response = await _call_gpt(
+            system_prompt=system_prompt,
+            user_messages=user_message,
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        details_dict = json.loads(gpt_response)
+        
+        # Make sure it has the expected keys
+        for key in ["age", "gender", "location", "routine", "interests", "other"]:
+            if key not in details_dict:
+                details_dict[key] = ""
+        
+        return details_dict
+
+    except Exception as e:
+        logger.error(f"Error parsing user details for {user_id}: {e}")
+        return {
+            "age": "",
+            "gender": "",
+            "location": "",
+            "routine": "",
+            "interests": "",
+            "other": ""
+        }
+
 async def ask_openai_normal(user_id: str, user_text: str) -> str:
     """
     Enhanced life coaching conversation with holistic context awareness.
@@ -563,8 +410,17 @@ async def ask_openai_normal(user_id: str, user_text: str) -> str:
 
         user_record = get_user(user_id) or {}
         user_summary = user_record.get("conversation_summary", {}).get("summary", "")
-        user_language = user_record.get("language", "English")
+        user_language = user_record.get("language", "français")  # Changed default to français
         user_details = user_record.get("user_details", {})
+
+        # Parse any new details from user's message
+        try:
+            new_details = await parse_user_details_from_text(user_id, user_text)
+            if any(new_details.values()):
+                merged_details = {**user_details, **new_details}
+                user_details = merged_details
+        except Exception as e:
+            logger.error(f"Error parsing details in normal conversation: {e}")
 
         # Format the main prompt with all user details
         system_prompt = MAIN_SYSTEM_PROMPT.format(
@@ -579,7 +435,7 @@ async def ask_openai_normal(user_id: str, user_text: str) -> str:
             user_language=user_language
         )
 
-        assistant_text = _call_gpt(
+        assistant_text = await _call_gpt(
             system_prompt,
             recent_messages,
             temperature=0.7,
@@ -588,20 +444,56 @@ async def ask_openai_normal(user_id: str, user_text: str) -> str:
 
         _add_msg(user_id, "assistant", assistant_text)
 
-        # Parse any new details from user's message
-        new_details = parse_user_details_from_text(user_id, user_text)
-        
-        # Update user details if new information is found
-        if any(new_details.values()):
-            merged_details = {**user_details, **new_details}
-            updated_summary = _summary_from_convo(CONVERSATIONS[user_id])
-            update_user_summary(user_id, {
-                "summary": updated_summary,
-                "user_details": merged_details
-            })
+        # Update the database with new details if we have them
+        updated_summary = _summary_from_convo(CONVERSATIONS[user_id])
+        update_user_summary(user_id, {
+            "summary": updated_summary,
+            "user_details": user_details
+        })
 
         return assistant_text
 
     except Exception as e:
         logger.error(f"Error in ask_openai_normal for {user_id}: {e}")
-        return "Could you share more about what's on your mind? I'm here to listen and help you explore your thoughts." 
+        return "Could you share more about what's on your mind? I'm here to listen and help you explore your thoughts."
+
+async def analyze_language_choice(user_id: str, user_text: str) -> tuple[str, str]:
+    """
+    Analyzes the user's language choice response and returns a tuple of (language_code, confirmation_message).
+    Uses GPT to understand the intent even if the user doesn't use exact keywords.
+    """
+    try:
+        system_prompt = """
+You are analyzing a user's response to choose between French and English.
+Detect their language preference regardless of how they express it.
+Return a JSON object with exactly two fields:
+{
+    "language": "français" or "english",
+    "confirmation_message": "confirmation message in their chosen language"
+}
+
+Examples of analysis:
+"Je préfère le français" -> {"language": "français", "confirmation_message": "Parfait, nous allons continuer en français..."}
+"English please" -> {"language": "english", "confirmation_message": "Perfect, we'll continue in English..."}
+"French" -> {"language": "français", "confirmation_message": "Parfait, nous allons continuer en français..."}
+"Anglais" -> {"language": "english", "confirmation_message": "Perfect, we'll continue in English..."}
+
+If the choice is unclear, set language to "unknown" and provide a bilingual message asking for clarification.
+"""
+        chat_input = [{"role": "user", "content": user_text}]
+        response = await _call_gpt(
+            system_prompt,
+            chat_input,
+            temperature=0.3,
+            max_tokens=150
+        )
+        
+        result = json.loads(response)
+        return result["language"], result["confirmation_message"]
+
+    except Exception as e:
+        logger.error(f"Error analyzing language choice for {user_id}: {e}")
+        return "unknown", (
+            "Je n'ai pas compris votre choix de langue. Pourriez-vous répondre simplement 'Français' ou 'English' ?\n"
+            "I didn't understand your language choice. Could you simply reply with 'Français' or 'English'?"
+        ) 
