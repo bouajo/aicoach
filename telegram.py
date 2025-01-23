@@ -1,11 +1,9 @@
-# telegram.py
-
 import os
 import logging
 import asyncio
 from telethon import TelegramClient, events
-from openai_agent import ask_openai
-from database import get_user, create_or_update_user
+from deepseek_agent import ask_coach_response  # Changed import
+from data.database import get_user, create_or_update_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,9 +18,8 @@ client = TelegramClient("life_coach_bot", API_ID, API_HASH)
 async def handle_telegram_message(event):
     sender_id = event.sender_id
     text = event.raw_text.strip()
-    user_id = str(sender_id)  # simple string ID
+    user_id = str(sender_id)
 
-    # Grab or init user in DB
     user_record = get_user(user_id)
     if not user_record:
         user_record = create_or_update_user(user_id, {
@@ -34,17 +31,14 @@ async def handle_telegram_message(event):
     state = user_record.get("conversation_state", "init")
 
     if state == "init":
-        # Step 1: ask for language
         create_or_update_user(user_id, {"conversation_state": "waiting_language"})
         await event.respond("Hello! Which language would you like to use?")
     elif state == "waiting_language":
-        # store language, move to active
         new_language = text.lower()
         create_or_update_user(user_id, {"language": new_language, "conversation_state": "active"})
         await event.respond(f"Great! I'll use {new_language}. What goals or challenges would you like to discuss today?")
     else:
-        # 'active'
-        reply = ask_openai(user_id, text)
+        reply = await ask_coach_response(user_id, text)
         await event.respond(reply)
 
 async def start_telegram_bot():

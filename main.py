@@ -1,68 +1,39 @@
-from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-import logging
+from fastapi import FastAPI
+from data.models import UserData, ConversationState
+from data.database import get_user, create_or_update_user
+from managers import prompt_manager, state_manager
+from services import ai_service
 
-from database import get_user, create_or_update_user
-from openai_agent import ask_openai, ask_openai_discovery  # <--- ADDED IMPORT
+app = FastAPI()
+pm = prompt_manager.PromptManager()
+sm = state_manager.StateManager()
 
-logger = logging.getLogger(__name__)
-
-app = FastAPI(title="Life Coach API")
-
-class UserMessage(BaseModel):
-    user_id: str
-    text: str
-
-@app.post("/message")
-def handle_message(msg: UserMessage):
-    """
-    Updated 3-step approach:
-      1) 'init' => automatically ask for language
-      2) 'waiting_language' => store user's language, then go to 'discovery'
-      3) 'discovery' => gather personal info, then go to 'active'
-      4) 'active' => pass message to OpenAI
-    """
-    user_id = msg.user_id.strip()
-    text = msg.text.strip()
-
+@app.post("/conversation")
+async def handle_conversation(user_id: str, message: str):
+    # Get or create user data
     user_record = get_user(user_id)
-
-    # If user doesn't exist, create them with conversation_state=init
     if not user_record:
         user_record = create_or_update_user(user_id, {
-            "conversation_state": "init",
-            "language": "",
-            "conversation_summary": {}
+            "conversation_state": ConversationState.INTRODUCTION.value,
+            "user_details": {}
         })
+    
+    user_data = UserData(**user_record)
+    current_state = ConversationState(user_data.conversation_state)
+    
+    # Get AI response
+    prompt = pm.get_prompt(current_state, user_data.dict())
+    ai_response = await ai_service.get_response(prompt, [{"role": "user", "content": message}])
+    
+    # Update state and save data
+    new_state = sm.get_next_state(current_state)
+    create_or_update_user(user_id, {"conversation_state": new_state.value})
+    
+    return {"response": ai_response}
 
-    state = user_record.get("conversation_state", "init")
-
-    if state == "init":
-        create_or_update_user(user_id, {"conversation_state": "waiting_language"})
-        return {"reply": "Hello! Which language would you like to use? (e.g. English, French, Spanish...)"}
-
-    elif state == "waiting_language":
-        # Set user language, then go to 'discovery'
-        new_language = text.lower()
-        create_or_update_user(user_id, {
-            "language": new_language,
-            "conversation_state": "discovery"
-        })
-        return {"reply": f"Great! I'll use {new_language}. Tell me more about yourself so I can better understand your situation."}
-
-    elif state == "discovery":
-        # We'll do exactly ONE discovery message, then move to 'active'
-        discovery_reply = ask_openai_discovery(user_id, text)
-        create_or_update_user(user_id, {"conversation_state": "active"})
-        return {"reply": discovery_reply}
-
-    else:
-        # state='active'
-        # Pass the user's text to the normal conversation
-        reply_text = ask_openai(user_id, text)
-        return {"reply": reply_text}
-
-@app.get("/")
-def root():
-    return {"message": "Life Coach API is running!"}
+@app.get("/user/{user_id}")
+async def get_user_data(user_id: str):
+    user_record = get_user(user_id)
+    if not user_record:
+        return {"error": "User not found"}
+    return user_record
