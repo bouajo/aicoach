@@ -1,17 +1,20 @@
 import os
 import logging
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from dotenv import load_dotenv
 
 load_dotenv()
 
 class NotificationService:
     def __init__(self):
+        session = StringSession(os.getenv("TELETHON_SESSION", ""))
         self.client = TelegramClient(
-            'notifications',
+            session,
             int(os.getenv("TELEGRAM_API_ID")),
             os.getenv("TELEGRAM_API_HASH")
-        ).start(bot_token=os.getenv("TELEGRAM_BOT_TOKEN"))
+        )
+        self.client.start(phone=os.getenv("TELEGRAM_PHONE_NUMBER"))
         
     async def send_reminder(self, user_id: str, message: str):
         try:

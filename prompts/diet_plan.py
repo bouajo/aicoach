@@ -2,10 +2,15 @@ DIET_PLAN_PROMPT = """
 En tant que nutritionniste expert, génère un plan de régime basé sur :
 
 Données utilisateur :
-- Prénom: {first_name}
-- IMC initial: {imc}
-- Objectif: {weight_diff} kg en {weeks} semaines
-- Historique: {diet_history}
+- Prénom: {user_data.get('first_name', 'Utilisateur')}
+- Taille: {user_data.get('height', '?')} cm
+- Poids actuel: {user_data.get('current_weight', '?')} kg
+- Objectif: {user_data.get('target_weight', '?')} kg
+- Date cible: {user_data.get('target_date', '?')}
+- Âge: {user_data.get('age', '?')} ans
+
+Historique des conversations :
+{history[-3:] if history else 'Pas d\'historique disponible'}
 
 Règles du régime :
 1. Jeûne intermittent 16/8
