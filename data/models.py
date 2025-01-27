@@ -26,15 +26,37 @@ class ConversationState(str, Enum):
         return states_flow.get(self, self)
 
 class UserProfile(BaseModel):
-    first_name: Optional[str] = None
+    user_id: str
     age: Optional[int] = None
     height_cm: Optional[int] = None
     current_weight: Optional[float] = None
     target_weight: Optional[float] = None
-    target_date: Optional[datetime] = None
+    target_date: Optional[int] = None  # Nombre de mois pour atteindre l'objectif
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
     allergies: List[str] = Field(default_factory=list)
     preferences: List[str] = Field(default_factory=list)
     schedule_constraints: List[str] = Field(default_factory=list)
+
+    @property
+    def is_complete(self) -> bool:
+        """Vérifie si toutes les informations requises sont présentes."""
+        return all([
+            self.age,
+            self.height_cm,
+            self.current_weight,
+            self.target_weight,
+            self.target_date
+        ])
+
+    @property
+    def next_required_field(self) -> Optional[str]:
+        """Retourne le prochain champ requis."""
+        fields = ["age", "height_cm", "current_weight", "target_weight", "target_date"]
+        for field in fields:
+            if not getattr(self, field):
+                return field
+        return None
 
 class UserGoals(BaseModel):
     weight_loss: Optional[float] = None
@@ -43,28 +65,24 @@ class UserGoals(BaseModel):
     exercise_preferences: List[str] = Field(default_factory=list)
 
 class DietPlan(BaseModel):
+    user_id: str
     calories_per_day: int
-    meals_per_day: int
+    meals_per_day: int = 3
+    created_at: datetime = Field(default_factory=datetime.utcnow)
     fasting_hours: Optional[int] = None
     restrictions: List[str] = Field(default_factory=list)
     supplements: List[str] = Field(default_factory=list)
     weekly_goals: List[str] = Field(default_factory=list)
 
 class ConversationMessage(BaseModel):
-    role: str
-    content: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
-class UserContext(BaseModel):
     user_id: str
-    state: ConversationState = ConversationState.INTRODUCTION
-    language: str = "français"
-    profile: UserProfile = Field(default_factory=UserProfile)
-    goals: UserGoals = Field(default_factory=UserGoals)
-    diet_plan: Optional[DietPlan] = None
-    conversation_history: List[ConversationMessage] = Field(default_factory=list)
-    last_interaction: Optional[datetime] = None
+    role: str  # "user" ou "assistant"
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    @classmethod
-    def default(cls, user_id: str) -> 'UserContext':
-        return cls(user_id=user_id)
+    def dict(self, *args, **kwargs) -> Dict[str, Any]:
+        """Surcharge pour formater les dates en ISO."""
+        d = super().dict(*args, **kwargs)
+        if "created_at" in d:
+            d["created_at"] = d["created_at"].isoformat()
+        return d

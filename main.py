@@ -1,39 +1,46 @@
+"""
+Main application entry point.
+"""
+
+import os
+import logging
+import asyncio
+from dotenv import load_dotenv
 from fastapi import FastAPI
-from data.models import UserData, ConversationState
-from data.database import get_user, create_or_update_user
-from managers import prompt_manager, state_manager
-from services import ai_service
+from uvicorn import Config, Server
+from services.telegram_service import telegram_service
+from api.routes import router
 
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app
 app = FastAPI()
-pm = prompt_manager.PromptManager()
-sm = state_manager.StateManager()
+app.include_router(router)
 
-@app.post("/conversation")
-async def handle_conversation(user_id: str, message: str):
-    # Get or create user data
-    user_record = get_user(user_id)
-    if not user_record:
-        user_record = create_or_update_user(user_id, {
-            "conversation_state": ConversationState.INTRODUCTION.value,
-            "user_details": {}
-        })
-    
-    user_data = UserData(**user_record)
-    current_state = ConversationState(user_data.conversation_state)
-    
-    # Get AI response
-    prompt = pm.get_prompt(current_state, user_data.dict())
-    ai_response = await ai_service.get_response(prompt, [{"role": "user", "content": message}])
-    
-    # Update state and save data
-    new_state = sm.get_next_state(current_state)
-    create_or_update_user(user_id, {"conversation_state": new_state.value})
-    
-    return {"response": ai_response}
+async def start_services():
+    """Start all services."""
+    # Start Telegram service
+    await telegram_service.start()
 
-@app.get("/user/{user_id}")
-async def get_user_data(user_id: str):
-    user_record = get_user(user_id)
-    if not user_record:
-        return {"error": "User not found"}
-    return user_record
+def main():
+    """Main entry point."""
+    try:
+        # Create uvicorn config
+        config = Config(app=app, host="0.0.0.0", port=8000)
+        server = Server(config)
+
+        # Run both FastAPI and Telegram service
+        loop = asyncio.get_event_loop()
+        loop.create_task(start_services())
+        loop.run_until_complete(server.serve())
+    except Exception as e:
+        logger.error(f"Error starting application: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    main()

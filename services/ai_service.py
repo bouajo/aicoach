@@ -4,59 +4,80 @@ Service for handling AI model interactions.
 
 import os
 import logging
-from typing import List, Dict, Any
-import httpx
-from dotenv import load_dotenv
+from typing import List, Dict, Any, Optional
+from enum import Enum
+from openai import AsyncOpenAI
+from managers import prompt_manager
 
-load_dotenv()
 logger = logging.getLogger(__name__)
+
+class AIProvider(str, Enum):
+    DEEPSEEK = "deepseek"
 
 class AIService:
     def __init__(self):
-        self.api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not self.api_key:
-            raise ValueError("Missing DeepSeek API key")
+        # Initialisation du client DeepSeek
+        self.deepseek_client = AsyncOpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com"
+        )
         
-        self.api_url = "https://api.deepseek.com/chat/completions"
-        self.model = "deepseek-chat"
+        # Configuration par défaut
+        self.default_provider = AIProvider.DEEPSEEK
+        self.model_configs = {
+            AIProvider.DEEPSEEK: {
+                "model": "deepseek-chat",
+                "temperature": 0.7,
+                "max_tokens": 300
+            }
+        }
 
-    async def get_response(self, messages: List[Dict[str, str]]) -> str:
+    async def get_response(
+        self,
+        prompt: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        provider: Optional[AIProvider] = None,
+        **kwargs
+    ) -> str:
         """
-        Get response from the AI model.
+        Obtient une réponse du modèle AI.
         
         Args:
-            messages: List of message dictionaries with 'role' and 'content'
-        
+            prompt: Prompt système
+            conversation_history: Historique optionnel de la conversation
+            provider: Fournisseur AI à utiliser (toujours DeepSeek)
+            **kwargs: Arguments supplémentaires pour l'appel API
+            
         Returns:
-            str: The AI model's response
+            Réponse générée
         """
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
+            messages = [{"role": "system", "content": prompt}]
             
-            data = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 1000
-            }
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.api_url,
-                    headers=headers,
-                    json=data,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
+            if conversation_history:
+                messages.extend(conversation_history)
+
+            return await self._call_deepseek(messages, **kwargs)
 
         except Exception as e:
-            logger.error(f"Error getting AI response: {str(e)}", exc_info=True)
+            logger.error(f"Error getting AI response: {str(e)}")
+            return "Désolé, j'ai rencontré un problème technique. Veuillez réessayer."
+
+    async def _call_deepseek(self, messages: List[Dict[str, str]], **kwargs) -> str:
+        """Appelle l'API DeepSeek."""
+        try:
+            config = self.model_configs[AIProvider.DEEPSEEK].copy()
+            config.update(kwargs)
+            
+            response = await self.deepseek_client.chat.completions.create(
+                messages=messages,
+                **config
+            )
+            return response.choices[0].message.content
+
+        except Exception as e:
+            logger.error(f"DeepSeek API error: {str(e)}")
             raise
 
+# Instance globale du service
 ai_service = AIService()

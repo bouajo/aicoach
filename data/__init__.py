@@ -1,8 +1,8 @@
 """
-Data package for models and database interactions.
+Database module initialization.
 """
 
 from .database import db
-from .models import UserContext, DietPlan, ConversationState, ConversationMessage
+from .models import DietPlan, ConversationState, ConversationMessage, UserProfile
 
-__all__ = ['db', 'UserContext', 'DietPlan', 'ConversationState', 'ConversationMessage'] 
+__all__ = ['db', 'DietPlan', 'ConversationState', 'ConversationMessage', 'UserProfile'] 
