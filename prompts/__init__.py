@@ -1,9 +1,15 @@
-from .introduction import INTRODUCTION_PROMPT
-from .diet_plan import DIET_PLAN_PROMPT
-from .follow_up import FOLLOW_UP_PROMPT
+"""
+Package prompts: contient les templates de prompts pour différentes phases de la conversation.
+"""
+
+from .introduction import get_introduction_prompt, get_data_collection_prompt
+from .diet_plan import get_diet_plan_prompt
+from .follow_up import get_progress_check_prompt, get_adjustment_prompt
 
 __all__ = [
-    'INTRODUCTION_PROMPT',
-    'DIET_PLAN_PROMPT',
-    'FOLLOW_UP_PROMPT'
-]
+    'get_introduction_prompt',
+    'get_data_collection_prompt',
+    'get_diet_plan_prompt',
+    'get_progress_check_prompt',
+    'get_adjustment_prompt'
+] 

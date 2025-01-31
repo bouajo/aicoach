@@ -1,154 +1,264 @@
 """
-Manages dynamic prompt generation based on conversation state and context.
+Génère des prompts dynamiques en fonction de l'état et du profil.
 """
 
-import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from data.models import (
-    ConversationState,
-    UserProfile,
-    ConversationMessage,
-    DietPlan
-)
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Any, Optional
+from data.models import UserProfile, DietPlan, ConversationState
 
 class PromptManager:
+    """Gère les prompts système et les templates de messages."""
+    
     def __init__(self):
-        # Message d'introduction détaillé
-        self.initial_greeting = (
-            "Bonjour ! Je suis Eric, votre coach en nutrition personnalisé. 👋\n\n"
-            "Je suis là pour vous aider à atteindre vos objectifs de manière saine et durable. "
-            "Pour créer un programme adapté à vos besoins, j'ai besoin de quelques informations :\n"
-            "- Votre âge\n"
-            "- Votre taille\n"
-            "- Votre poids actuel\n"
-            "- Votre poids idéal\n"
-            "- Le temps que vous vous donnez pour l'atteindre\n\n"
-            "Pour commencer, pouvez-vous me dire votre âge ?"
-        )
-
-        # Prompts de base pour chaque étape
         self.system_prompts = {
-            "base_identity": """
-Tu es Eric, coach en nutrition professionnel. Tu collectes les informations de manière naturelle et bienveillante.
-- Sois empathique et à l'écoute
-- Pose UNE SEULE question à la fois
-- Garde un ton amical mais professionnel
-- Encourage et valorise chaque réponse
-""",
-            "data_collection": {
-                "age": {
-                    "question": "Quel est votre âge ?",
-                    "validation": "Nombre entre 16 et 100",
-                    "next": "height"
-                },
-                "height": {
-                    "question": "Merci ! Et quelle est votre taille (en cm) ?",
-                    "validation": "Nombre entre 140 et 220",
-                    "next": "current_weight"
-                },
-                "current_weight": {
-                    "question": "D'accord, et quel est votre poids actuel (en kg) ?",
-                    "validation": "Nombre entre 40 et 250",
-                    "next": "target_weight"
-                },
-                "target_weight": {
-                    "question": "Très bien. Quel est votre objectif de poids (en kg) ?",
-                    "validation": "Nombre entre 40 et 250",
-                    "next": "target_date"
-                },
-                "target_date": {
-                    "question": "Dans combien de mois souhaitez-vous atteindre cet objectif ?",
-                    "validation": "Nombre entre 1 et 24",
-                    "next": "summary"
-                }
+            "base": {
+                "fr": (
+                    "Tu es Eric, un coach en nutrition professionnel avec plus de 20 ans d'expérience. "
+                    "Tu aides les gens à atteindre leurs objectifs de santé et de forme physique grâce à "
+                    "des conseils nutritionnels personnalisés. Sois amical, professionnel et concis. "
+                    "Concentre-toi sur la collecte des informations nécessaires avant de faire des recommandations."
+                ),
+                "en": (
+                    "You are Eric, a professional nutrition coach with over 20 years of experience. "
+                    "You help people achieve their health and fitness goals through personalized nutrition advice. "
+                    "Be friendly, professional, and concise. Focus on gathering necessary information "
+                    "before making recommendations."
+                )
             },
-            "data_validation": """
-Vérifie si la réponse est valide selon les critères.
-Si non valide, explique gentiment pourquoi et redemande l'information.
-Si valide, passe à la question suivante avec une transition naturelle.
-""",
-            "summary_creation": """
-Une fois toutes les informations collectées, crée un résumé personnalisé :
-1. Récapitule les informations fournies
-2. Calcule l'IMC actuel
-3. Détermine si l'objectif est réaliste
-4. Propose une approche adaptée
-"""
+            "data_collection": {
+                "en": (
+                    "You are now in data collection mode. Ask one question at a time to gather the following "
+                    "information: age, height (in cm), current weight (in kg), target weight (in kg), and "
+                    "target date. Validate each response before moving to the next question."
+                ),
+                "fr": (
+                    "Tu es maintenant en mode collecte de données. Pose une question à la fois pour recueillir "
+                    "les informations suivantes : âge, taille (en cm), poids actuel (en kg), poids cible (en kg) "
+                    "et date cible. Valide chaque réponse avant de passer à la question suivante."
+                )
+            },
+            "diet_planning": {
+                "en": (
+                    "You are now in diet planning mode. Based on the user's profile and goals, create a "
+                    "personalized diet plan. Consider their current weight, target weight, and timeline. "
+                    "Ask about any dietary restrictions or preferences before finalizing the plan."
+                ),
+                "fr": (
+                    "Tu es maintenant en mode planification alimentaire. En fonction du profil et des objectifs "
+                    "de l'utilisateur, crée un plan alimentaire personnalisé. Prends en compte leur poids actuel, "
+                    "poids cible et délai. Demande les restrictions ou préférences alimentaires avant de "
+                    "finaliser le plan."
+                )
+            }
+        }
+        
+        self.message_templates = {
+            ConversationState.INTRODUCTION: {
+                "fr": (
+                    "👋 Hello! I'm Eric, your personal nutrition coach.\n\n"
+                    "To begin our journey together, please tell me which language you would like to communicate in.\n\n"
+                    "For example, you can write: English, Français, etc."
+                ),
+                "en": (
+                    "👋 Hello! I'm Eric, your personal nutrition coach.\n\n"
+                    "To begin our journey together, please tell me which language you would like to communicate in.\n\n"
+                    "For example, you can write: English, Français, etc."
+                )
+            },
+            ConversationState.LANGUAGE_CONFIRMATION: {
+                "fr": "✅ Parfait! Nous continuerons en français. Pour commencer, j'aimerais en savoir plus sur vous.",
+                "en": "✅ Perfect! We'll continue in English. To begin, I'd like to learn more about you."
+            },
+            ConversationState.NAME_COLLECTION: {
+                "fr": "👤 Quel est votre prénom ?",
+                "en": "👤 What is your first name?"
+            },
+            ConversationState.AGE_COLLECTION: {
+                "fr": "🎂 {first_name}, quel âge avez-vous ?",
+                "en": "🎂 {first_name}, how old are you?"
+            },
+            ConversationState.HEIGHT_COLLECTION: {
+                "fr": "📏 Quelle est votre taille en centimètres ?",
+                "en": "📏 What is your height in centimeters?"
+            },
+            ConversationState.START_WEIGHT_COLLECTION: {
+                "fr": "⚖️ Quel est votre poids actuel en kilogrammes ?",
+                "en": "⚖️ What is your current weight in kilograms?"
+            },
+            ConversationState.GOAL_COLLECTION: {
+                "fr": "🎯 Quel est votre poids cible en kilogrammes ?",
+                "en": "🎯 What is your target weight in kilograms?"
+            },
+            ConversationState.TARGET_DATE_COLLECTION: {
+                "fr": (
+                    "📅 Quand souhaitez-vous atteindre cet objectif ?\n"
+                    "Format: AAAA-MM-JJ (exemple: 2024-12-31)"
+                ),
+                "en": (
+                    "📅 When would you like to achieve this goal?\n"
+                    "Format: YYYY-MM-DD (example: 2024-12-31)"
+                )
+            },
+            ConversationState.DIET_PREFERENCES: {
+                "fr": (
+                    "Avez-vous des préférences alimentaires ? Par exemple :\n"
+                    "- Végétarien/Végétalien\n"
+                    "- Riche en protéines\n"
+                    "- Pauvre en glucides\n"
+                    "- Régime méditerranéen"
+                ),
+                "en": (
+                    "Do you have any dietary preferences? For example:\n"
+                    "- Vegetarian/Vegan\n"
+                    "- High protein\n"
+                    "- Low carb\n"
+                    "- Mediterranean diet"
+                )
+            },
+            ConversationState.DIET_RESTRICTIONS: {
+                "fr": (
+                    "Avez-vous des restrictions alimentaires ou des allergies ?\n"
+                    "Par exemple :\n"
+                    "- Intolérance au gluten\n"
+                    "- Intolérance au lactose\n"
+                    "- Allergies aux noix\n"
+                    "- Autres allergies alimentaires"
+                ),
+                "en": (
+                    "Do you have any dietary restrictions or allergies?\n"
+                    "For example:\n"
+                    "- Gluten intolerance\n"
+                    "- Lactose intolerance\n"
+                    "- Nut allergies\n"
+                    "- Other food allergies"
+                )
+            }
         }
 
-    def get_initial_greeting(self) -> str:
-        """Retourne le message d'introduction initial."""
-        return self.initial_greeting
+    def get_system_prompt(self, prompt_type: str = "base", language: str = "fr") -> str:
+        """Récupère le prompt système pour le type et la langue donnés."""
+        return self.system_prompts.get(prompt_type, {}).get(language, self.system_prompts["base"][language])
 
-    def get_data_collection_prompt(self, current_field: str, profile: UserProfile, last_answer: str = "") -> str:
-        """
-        Génère le prompt pour la collecte de données.
-        """
-        field_info = self.system_prompts["data_collection"].get(current_field, {})
-        profile_summary = self._generate_profile_summary(profile)
-        
-        return f"""
-{self.system_prompts['base_identity']}
-
-État actuel de la collecte :
-{profile_summary}
-
-Dernière réponse de l'utilisateur : "{last_answer}"
-
-Information à collecter : {current_field}
-Validation requise : {field_info.get('validation', 'N/A')}
-
-Si la réponse est valide :
-- Stocke l'information
-- Pose la question suivante : {field_info.get('question', 'Passez à la suite')}
-
-Si la réponse n'est pas valide :
-- Explique gentiment pourquoi
-- Redemande l'information de manière bienveillante
-"""
-
-    def get_summary_prompt(self, profile: UserProfile, diet_plan: Optional[DietPlan] = None) -> str:
-        """
-        Génère le prompt pour le résumé des informations collectées.
-        """
-        return f"""
-{self.system_prompts['base_identity']}
-
-{self.system_prompts['summary_creation']}
-
-Profil complet :
-{self._generate_profile_summary(profile)}
-
-Plan alimentaire actuel :
-{self._generate_diet_plan_summary(diet_plan)}
-
-Crée un résumé personnalisé et propose la prochaine étape.
-"""
-
-    def _generate_profile_summary(self, profile: UserProfile) -> str:
-        """Génère un résumé du profil utilisateur."""
-        summary_parts = []
-        
-        if profile.age:
-            summary_parts.append(f"- Âge : {profile.age} ans")
-        if profile.height_cm:
-            summary_parts.append(f"- Taille : {profile.height_cm} cm")
-        if profile.current_weight:
-            summary_parts.append(f"- Poids actuel : {profile.current_weight} kg")
-        if profile.target_weight:
-            summary_parts.append(f"- Poids cible : {profile.target_weight} kg")
+    def get_message_template(
+        self,
+        state: ConversationState,
+        language: str = "fr",
+        **kwargs
+    ) -> str:
+        """Récupère le template de message pour l'état et la langue donnés."""
+        template = self.message_templates.get(state, {}).get(language, "")
+        if not template:
+            # Fallback messages
+            fallbacks = {
+                "fr": "Je suis désolé, je ne peux pas traiter cette étape pour le moment.",
+                "en": "I'm sorry, I cannot process this step at the moment."
+            }
+            return fallbacks.get(language, fallbacks["fr"])
             
-        return "\n".join(summary_parts) if summary_parts else "Aucune information collectée"
+        try:
+            if kwargs:
+                return template.format(**kwargs)
+            return template
+        except Exception as e:
+            logger.error(f"Error formatting template: {e}")
+            return template
 
-    def _generate_diet_plan_summary(self, diet_plan: Optional[DietPlan]) -> str:
-        """Génère un résumé du plan alimentaire."""
-        if not diet_plan:
-            return "Plan non défini"
-            
-        return f"Plan alimentaire : {diet_plan.calories_per_day} kcal/jour"
+    def get_error_message(self, error_type: str, language: str = "fr") -> str:
+        """Récupère le message d'erreur pour le type et la langue donnés."""
+        error_messages = {
+            "invalid_age": {
+                "fr": "Veuillez fournir un âge valide entre 12 et 100 ans.",
+                "en": "Please provide a valid age between 12 and 100."
+            },
+            "invalid_height": {
+                "fr": "Veuillez fournir une taille valide en centimètres (entre 100 et 250).",
+                "en": "Please provide a valid height in centimeters (between 100 and 250)."
+            },
+            "invalid_weight": {
+                "fr": "Veuillez fournir un poids valide en kilogrammes (entre 30 et 300).",
+                "en": "Please provide a valid weight in kilograms (between 30 and 300)."
+            },
+            "invalid_date": {
+                "fr": "Veuillez fournir une date valide au format AAAA-MM-JJ.",
+                "en": "Please provide a valid date in YYYY-MM-DD format."
+            }
+        }
+        return error_messages.get(error_type, {}).get(language, "Une erreur s'est produite.")
 
-# Instance globale du PromptManager
+    def get_summary_prompt(self, profile: UserProfile, plan: Optional[DietPlan] = None, language: str = "fr") -> str:
+        """Génère un résumé du profil et du plan."""
+        if language == "fr":
+            summary = (
+                f"Récapitulatif de votre profil :\n"
+                f"- Âge : {profile.age} ans\n"
+                f"- Taille : {profile.height_cm} cm\n"
+                f"- Poids actuel : {profile.current_weight} kg\n"
+                f"- Objectif : {profile.target_weight} kg\n"
+                f"- Date cible : {profile.target_date}\n"
+            )
+            if plan:
+                summary += (
+                    f"\nVotre plan alimentaire :\n"
+                    f"- Calories quotidiennes : {plan.daily_calories} kcal\n"
+                    f"- Fréquence des repas : {plan.meal_frequency} fois par jour\n"
+                )
+            return summary + "\nSouhaitez-vous des détails supplémentaires ou des ajustements ?"
+        else:
+            summary = (
+                f"Your profile summary:\n"
+                f"- Age: {profile.age} years\n"
+                f"- Height: {profile.height_cm} cm\n"
+                f"- Current weight: {profile.current_weight} kg\n"
+                f"- Target: {profile.target_weight} kg\n"
+                f"- Target date: {profile.target_date}\n"
+            )
+            if plan:
+                summary += (
+                    f"\nYour diet plan:\n"
+                    f"- Daily calories: {plan.daily_calories} kcal\n"
+                    f"- Meal frequency: {plan.meal_frequency} times per day\n"
+                )
+            return summary + "\nWould you like additional details or adjustments?"
+
+    def get_introduction_prompt(self, language: str = "fr") -> str:
+        """Get the initial introduction prompt in the specified language."""
+        return self.message_templates[ConversationState.INTRODUCTION][language]
+
+    def get_data_collection_prompt(self, field: str, language: str = "fr") -> str:
+        """Get the prompt for collecting a specific piece of user data."""
+        state = getattr(ConversationState, f"{field.upper()}_COLLECTION", None)
+        if state and state in self.message_templates:
+            return self.message_templates[state][language]
+        return self.get_error_message("invalid_field", language)
+
+    def get_validation_error(self, field: str, language: str = "fr") -> str:
+        """Get error message for field validation failure."""
+        errors = {
+            "first_name": {
+                "fr": "Veuillez entrer un prénom valide.",
+                "en": "Please enter a valid first name."
+            },
+            "age": {
+                "fr": "Veuillez entrer un âge valide entre 12 et 100 ans.",
+                "en": "Please enter a valid age between 12 and 100 years."
+            },
+            "height_cm": {
+                "fr": "Veuillez entrer une taille valide entre 100 et 250 cm.",
+                "en": "Please enter a valid height between 100 and 250 cm."
+            },
+            "current_weight": {
+                "fr": "Veuillez entrer un poids valide entre 30 et 300 kg.",
+                "en": "Please enter a valid weight between 30 and 300 kg."
+            },
+            "target_weight": {
+                "fr": "Veuillez entrer un poids cible valide entre 30 et 300 kg.",
+                "en": "Please enter a valid target weight between 30 and 300 kg."
+            },
+            "target_date": {
+                "fr": "Veuillez entrer une date future valide au format AAAA-MM-JJ (maximum 2 ans).",
+                "en": "Please enter a valid future date in YYYY-MM-DD format (maximum 2 years)."
+            }
+        }
+        return errors.get(field, {}).get(language, "Une erreur s'est produite.")
+
+# Instance globale
 prompt_manager = PromptManager()

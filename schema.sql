@@ -1,11 +1,12 @@
 -- Create users table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     conversation_state TEXT NOT NULL DEFAULT 'introduction',
     language TEXT NOT NULL DEFAULT 'français',
     first_name TEXT,
     age INTEGER,
     height INTEGER,
+    start_weight NUMERIC,
     current_weight NUMERIC,
     target_weight NUMERIC,
     target_date DATE,
@@ -14,7 +15,7 @@ CREATE TABLE users (
 );
 
 -- Create user_context table
-CREATE TABLE user_context (
+CREATE TABLE IF NOT EXISTS user_context (
     user_id TEXT PRIMARY KEY REFERENCES users(user_id),
     current_state TEXT NOT NULL DEFAULT 'introduction',
     profile JSONB NOT NULL DEFAULT '{}',
@@ -24,7 +25,7 @@ CREATE TABLE user_context (
 );
 
 -- Create conversations table
-CREATE TABLE conversations (
+CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT REFERENCES users(user_id),
     role TEXT NOT NULL,
@@ -33,7 +34,7 @@ CREATE TABLE conversations (
 );
 
 -- Create diet_plans table
-CREATE TABLE diet_plans (
+CREATE TABLE IF NOT EXISTS diet_plans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT REFERENCES users(user_id),
     plan_data JSONB NOT NULL,
@@ -42,7 +43,7 @@ CREATE TABLE diet_plans (
 );
 
 -- Create notifications table
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT REFERENCES users(user_id),
     type TEXT NOT NULL,
@@ -51,13 +52,13 @@ CREATE TABLE notifications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Create indexes for common queries
-CREATE INDEX idx_conversations_user_id ON conversations(user_id);
-CREATE INDEX idx_diet_plans_user_id ON diet_plans(user_id);
-CREATE INDEX idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX idx_notifications_unread ON notifications(user_id) WHERE NOT is_read;
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_diet_plans_user_id ON diet_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id) WHERE NOT is_read;
 
--- Create function to update updated_at timestamp
+-- Triggers for updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -66,7 +67,6 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers for updated_at
 CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW
@@ -75,4 +75,4 @@ CREATE TRIGGER update_users_updated_at
 CREATE TRIGGER update_diet_plans_updated_at
     BEFORE UPDATE ON diet_plans
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column(); 
+    EXECUTE FUNCTION update_updated_at_column();

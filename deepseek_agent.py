@@ -1,58 +1,40 @@
 """
-DeepSeek AI agent for conversation handling.
+Client/Agent spécifique DeepSeek pour la génération de réponses.
 """
 
 import os
 import logging
 import json
-from typing import Dict, List, Any
+from typing import Dict, List
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
-
-from data.database import db
+from openai import AsyncOpenAI  # Selon votre implémentation DeepSeek
 from services.conversation_service import conversation_service
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Initialize DeepSeek client
-client = AsyncOpenAI(
+# Initialiser le client DeepSeek
+deepseek_client = AsyncOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com",
+    base_url="https://api.deepseek.com"  # URL de l'API DeepSeek, à adapter
 )
 
-########################
-# PROMPTS
-########################
 COACH_PROMPT = """
-[Keep your existing COACH_PROMPT content unchanged]
+Tu es un coach nutritionnel expérimenté. Sois chaleureux, empathique, et pose des questions pour recueillir les infos manquantes. Donne des conseils personnalisés.
 """
 
-########################
-# DeepSeek Helpers
-########################
-
-async def _call_deepseek(
+async def call_deepseek(
     system_prompt: str,
     user_messages: List[Dict[str, str]],
-    temperature=0.7,
-    max_tokens=300
+    temperature: float = 0.7,
+    max_tokens: int = 300
 ) -> str:
     """
     Appelle l'API DeepSeek pour générer une réponse.
-    
-    Args:
-        system_prompt: Prompt système pour le contexte
-        user_messages: Liste des messages de la conversation
-        temperature: Paramètre de créativité
-        max_tokens: Nombre maximum de tokens dans la réponse
-        
-    Returns:
-        Réponse générée par le modèle
     """
     try:
         messages = [{"role": "system", "content": system_prompt}] + user_messages
-        response = await client.chat.completions.create(
+        response = await deepseek_client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
             temperature=temperature,
@@ -63,79 +45,25 @@ async def _call_deepseek(
         logger.error(f"DeepSeek API error: {e}")
         return "Désolé, j'ai rencontré un problème en générant la réponse."
 
-########################
-# Main Functions
-########################
-
 async def ask_coach_response(user_id: str, user_text: str) -> str:
     """
-    Génère une réponse du coach en utilisant l'historique des conversations.
-    
-    Args:
-        user_id: ID de l'utilisateur
-        user_text: Message de l'utilisateur
-        
-    Returns:
-        Réponse du coach
+    Génère une réponse du coach en se basant sur l'historique de la conversation.
     """
     try:
-        # Ajoute le message de l'utilisateur à l'historique
+        # Ajouter le message user dans l'historique
         await conversation_service.add_message(user_id, "user", user_text)
-        
-        # Récupère les messages récents
+
+        # Récupérer les derniers messages
         recent_messages = await conversation_service.get_recent_messages(user_id, limit=5)
-        messages_for_api = [{"role": msg.role, "content": msg.content} for msg in recent_messages]
+        messages_for_api = [{"role": m.role, "content": m.content} for m in recent_messages]
 
-        # Génère la réponse
-        assistant_reply = await _call_deepseek(
-            system_prompt=COACH_PROMPT,
-            user_messages=messages_for_api
-        )
-
-        # Sauvegarde la réponse
-        await conversation_service.add_message(user_id, "assistant", assistant_reply)
+        # Générer la réponse
+        reply = await call_deepseek(COACH_PROMPT, messages_for_api)
         
-        return assistant_reply
+        # Sauvegarder la réponse
+        await conversation_service.add_message(user_id, "assistant", reply)
+
+        return reply
     except Exception as e:
         logger.error(f"Error in ask_coach_response: {e}")
         return "Je suis désolé, j'ai rencontré un problème."
-
-async def propose_regime_intermittent(user_id: str, user_text: str, user_details: dict) -> str:
-    """
-    Propose un régime intermittent personnalisé.
-    
-    Args:
-        user_id: ID de l'utilisateur
-        user_text: Message de l'utilisateur
-        user_details: Détails du profil utilisateur
-        
-    Returns:
-        Plan de régime proposé
-    """
-    try:
-        # Ajoute le message de l'utilisateur à l'historique
-        await conversation_service.add_message(user_id, "user", user_text)
-        
-        # Prépare le message avec les détails utilisateur
-        detail_str = json.dumps(user_details, ensure_ascii=False)
-        profile_message = f"Voici mon profil: {detail_str}. Peux-tu me proposer un régime intermittent adapté ?"
-        
-        # Récupère l'historique récent
-        recent_messages = await conversation_service.get_recent_messages(user_id, limit=5)
-        messages_for_api = [{"role": msg.role, "content": msg.content} for msg in recent_messages]
-        messages_for_api.append({"role": "user", "content": profile_message})
-
-        # Génère le plan
-        plan_text = await _call_deepseek(
-            system_prompt=COACH_PROMPT,
-            user_messages=messages_for_api,
-            max_tokens=400
-        )
-
-        # Sauvegarde la réponse
-        await conversation_service.add_message(user_id, "assistant", plan_text)
-        
-        return plan_text
-    except Exception as e:
-        logger.error(f"Error in propose_regime_intermittent: {e}")
-        return "Je suis désolé, je n'arrive pas à proposer un plan maintenant."

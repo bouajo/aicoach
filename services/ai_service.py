@@ -1,83 +1,44 @@
 """
-Service for handling AI model interactions.
+Service for interacting with AI (DeepSeek).
 """
 
-import os
 import logging
-from typing import List, Dict, Any, Optional
-from enum import Enum
-from openai import AsyncOpenAI
-from managers import prompt_manager
+from typing import List, Dict, Any
+from deepseek_agent import call_deepseek
 
 logger = logging.getLogger(__name__)
 
-class AIProvider(str, Enum):
-    DEEPSEEK = "deepseek"
-
 class AIService:
-    def __init__(self):
-        # Initialisation du client DeepSeek
-        self.deepseek_client = AsyncOpenAI(
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com"
-        )
-        
-        # Configuration par défaut
-        self.default_provider = AIProvider.DEEPSEEK
-        self.model_configs = {
-            AIProvider.DEEPSEEK: {
-                "model": "deepseek-chat",
-                "temperature": 0.7,
-                "max_tokens": 300
-            }
-        }
-
     async def get_response(
-        self,
-        prompt: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
-        provider: Optional[AIProvider] = None,
-        **kwargs
+        self, 
+        system_prompt: str, 
+        conversation_history: List[Dict[str, str]], 
+        user_data: Dict[str, Any] = None
     ) -> str:
         """
-        Obtient une réponse du modèle AI.
+        Get an AI response based on system prompt and conversation history.
         
         Args:
-            prompt: Prompt système
-            conversation_history: Historique optionnel de la conversation
-            provider: Fournisseur AI à utiliser (toujours DeepSeek)
-            **kwargs: Arguments supplémentaires pour l'appel API
+            system_prompt: System instructions for the AI
+            conversation_history: List of previous messages
+            user_data: Optional user data for context
             
         Returns:
-            Réponse générée
+            Generated AI response
         """
         try:
-            messages = [{"role": "system", "content": prompt}]
+            # Add user context if available
+            context = ""
+            if user_data:
+                context = f"\nUser Context:\n"
+                for key, value in user_data.items():
+                    if key not in ["user_id", "created_at", "updated_at"]:
+                        context += f"- {key}: {value}\n"
+                system_prompt = f"{system_prompt}\n{context}"
             
-            if conversation_history:
-                messages.extend(conversation_history)
-
-            return await self._call_deepseek(messages, **kwargs)
-
+            return await call_deepseek(system_prompt, conversation_history)
         except Exception as e:
-            logger.error(f"Error getting AI response: {str(e)}")
-            return "Désolé, j'ai rencontré un problème technique. Veuillez réessayer."
+            logger.error(f"Error get_response AI: {e}", exc_info=True)
+            return "Sorry, an error occurred. Please try again later."
 
-    async def _call_deepseek(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """Appelle l'API DeepSeek."""
-        try:
-            config = self.model_configs[AIProvider.DEEPSEEK].copy()
-            config.update(kwargs)
-            
-            response = await self.deepseek_client.chat.completions.create(
-                messages=messages,
-                **config
-            )
-            return response.choices[0].message.content
-
-        except Exception as e:
-            logger.error(f"DeepSeek API error: {str(e)}")
-            raise
-
-# Instance globale du service
 ai_service = AIService()

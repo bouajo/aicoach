@@ -1,7 +1,5 @@
 fastapi
 uvicorn
 python-dotenv
-openai
 supabase
 httpx
-telethon

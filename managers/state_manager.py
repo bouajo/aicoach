@@ -1,111 +1,96 @@
 """
-Manages conversation state transitions.
+Gère les transitions d'état dans la conversation.
 """
 
-from typing import Dict, Any, Optional
-from data.models import ConversationState
+import logging
+from typing import Dict, Any, Optional, Tuple
+from datetime import datetime
+from data.models import ConversationState, UserProfile
+from data.validators import validate_user_profile
+
+logger = logging.getLogger(__name__)
 
 class StateManager:
-    def __init__(self):
-        # Définition des transitions de base
-        self.transitions = {
-            ConversationState.INTRODUCTION: ConversationState.COLLECTING_DATA,
-            ConversationState.COLLECTING_DATA: ConversationState.DIET_PLANNING,
-            ConversationState.DIET_PLANNING: ConversationState.ACTIVE_COACHING,
-            ConversationState.ACTIVE_COACHING: ConversationState.FOLLOW_UP,
-            ConversationState.FOLLOW_UP: ConversationState.ACTIVE_COACHING
+    """Gère les transitions d'état et la validation des données."""
+    
+    def determine_next_state(
+        self,
+        current_state: ConversationState,
+        user_profile: UserProfile,
+        message: str
+    ) -> Tuple[ConversationState, Optional[str]]:
+        """
+        Détermine le prochain état en fonction de l'état actuel et des données utilisateur.
+        
+        Args:
+            current_state: État actuel de la conversation
+            user_profile: Profil de l'utilisateur
+            message: Dernier message de l'utilisateur
+            
+        Returns:
+            Tuple (prochain_état, message_erreur)
+        """
+        try:
+            # Valider les données actuelles
+            profile_data = user_profile.dict()
+            try:
+                validate_user_profile(profile_data)
+            except ValueError as e:
+                return current_state, str(e)
+            
+            # Si toutes les données sont collectées, passer à la génération du plan
+            if user_profile.is_complete:
+                if current_state == ConversationState.DIET_RESTRICTIONS:
+                    return ConversationState.PLAN_GENERATION, None
+                elif current_state == ConversationState.PLAN_GENERATION:
+                    return ConversationState.PLAN_REVIEW, None
+                elif current_state == ConversationState.PLAN_REVIEW:
+                    return ConversationState.FREE_CHAT, None
+            
+            # Sinon, passer au prochain champ requis
+            next_field = user_profile.next_required_field()
+            if next_field:
+                return self._get_state_for_field(next_field), None
+                
+            # Par défaut, rester dans l'état actuel
+            return current_state, None
+            
+        except Exception as e:
+            logger.error(f"Erreur dans la transition d'état: {str(e)}")
+            return current_state, "Une erreur est survenue. Veuillez réessayer."
+
+    def _get_state_for_field(self, field_name: str) -> ConversationState:
+        """Retourne l'état correspondant au champ à collecter."""
+        field_to_state = {
+            "first_name": ConversationState.NAME_COLLECTION,
+            "age": ConversationState.AGE_COLLECTION,
+            "height_cm": ConversationState.HEIGHT_COLLECTION,
+            "current_weight": ConversationState.START_WEIGHT_COLLECTION,
+            "target_weight": ConversationState.GOAL_COLLECTION,
+            "target_date": ConversationState.TARGET_DATE_COLLECTION
         }
+        return field_to_state.get(field_name, ConversationState.INTRODUCTION)
 
-    def get_next_state(self, current_state: ConversationState, user_data: Optional[Dict[str, Any]] = None, user_message: Optional[str] = None) -> ConversationState:
+    def validate_field_value(self, field_name: str, value: Any) -> Tuple[bool, Optional[str]]:
         """
-        Determine the next conversation state based on current state, user data, and message.
+        Valide une valeur pour un champ donné.
         
         Args:
-            current_state: Current conversation state
-            user_data: Optional user data dictionary
-            user_message: Optional user message text
+            field_name: Nom du champ à valider
+            value: Valeur à valider
             
         Returns:
-            Next conversation state
+            Tuple (est_valide, message_erreur)
         """
-        if not user_data:
-            user_data = {}
-            
-        # Vérification des conditions de transition basées sur les données
-        if current_state == ConversationState.INTRODUCTION:
-            if user_data.get("first_name") and user_data.get("age"):
-                return ConversationState.COLLECTING_DATA
-                
-        elif current_state == ConversationState.COLLECTING_DATA:
-            required_fields = ["height", "current_weight", "target_weight", "target_date"]
-            if all(user_data.get(field) for field in required_fields):
-                return ConversationState.DIET_PLANNING
-                
-        elif current_state == ConversationState.DIET_PLANNING:
-            # Transition vers le coaching actif si l'utilisateur accepte le plan
-            if user_message and any(word in user_message.lower() for word in ["oui", "ok", "d'accord", "parfait", "bien"]):
-                return ConversationState.ACTIVE_COACHING
-                
-        elif current_state == ConversationState.ACTIVE_COACHING:
-            # Transition vers le suivi basée sur des conditions spécifiques
-            # (à implémenter selon vos besoins)
-            pass
-            
-        # Si aucune condition spéciale n'est remplie, utiliser la transition par défaut
-        return self.transitions.get(current_state, current_state)
+        try:
+            test_data = {"user_id": "test", field_name: value}
+            validate_user_profile(test_data)
+            return True, None
+        except ValueError as e:
+            return False, str(e)
+        except Exception as e:
+            logger.error(f"Erreur de validation: {str(e)}")
+            return False, "Une erreur est survenue lors de la validation."
 
-    def validate_state_transition(self, from_state: ConversationState, to_state: ConversationState) -> bool:
-        """
-        Valide si une transition d'état est autorisée.
-        
-        Args:
-            from_state: État de départ
-            to_state: État d'arrivée
-            
-        Returns:
-            True si la transition est valide
-        """
-        # Vérifie si la transition est dans la liste des transitions autorisées
-        if from_state in self.transitions and self.transitions[from_state] == to_state:
-            return True
-            
-        # Vérifie les cas spéciaux (comme le retour au coaching actif depuis le suivi)
-        if from_state == ConversationState.FOLLOW_UP and to_state == ConversationState.ACTIVE_COACHING:
-            return True
-            
-        return False
-
-    def get_state_requirements(self, state: ConversationState) -> Dict[str, Any]:
-        """
-        Retourne les exigences de données pour un état donné.
-        
-        Args:
-            state: État de la conversation
-            
-        Returns:
-            Dictionnaire des champs requis et leurs types
-        """
-        requirements = {
-            ConversationState.INTRODUCTION: {
-                "first_name": str,
-                "age": int
-            },
-            ConversationState.COLLECTING_DATA: {
-                "height": int,
-                "current_weight": float,
-                "target_weight": float,
-                "target_date": str
-            },
-            ConversationState.DIET_PLANNING: {
-                "height": int,
-                "current_weight": float,
-                "target_weight": float,
-                "target_date": str,
-                "allergies": list,
-                "preferences": list
-            }
-        }
-        return requirements.get(state, {})
-
-# Instance globale du service
+# Instance globale
 state_manager = StateManager()
