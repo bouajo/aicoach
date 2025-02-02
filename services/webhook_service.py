@@ -1,91 +1,138 @@
 """
-Service for handling webhook requests and integrating with the chat service.
+Service for handling WhatsApp webhook events.
 """
 
 import logging
-from typing import Dict, Any, Optional, Tuple, List
+import os
+import json
+from typing import Dict, Any
+from uuid import uuid4
+from datetime import datetime
+
+from fastapi import APIRouter, Request, Response
 from services.chat_service import chat_service
 
 logger = logging.getLogger(__name__)
 
 class WebhookService:
-    def extract_whatsapp_message(self, data: Dict[str, Any]) -> List[Tuple[str, str]]:
-        """
-        Extract messages from WhatsApp webhook payload.
+    def __init__(self):
+        self.verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+        if not self.verify_token:
+            raise ValueError("WHATSAPP_VERIFY_TOKEN is required")
         
-        Args:
-            data: The webhook payload from WhatsApp
-            
-        Returns:
-            List[Tuple[str, str]]: List of (user_id, message) tuples
-        """
-        messages = []
-        try:
-            # Handle WhatsApp webhook format
-            if "entry" in data:
-                for entry in data["entry"]:
-                    if "changes" in entry:
-                        for change in entry["changes"]:
-                            if change.get("value", {}).get("messages"):
-                                for message in change["value"]["messages"]:
-                                    if message.get("type") == "text":
-                                        user_id = message.get("from")
-                                        text = message.get("text", {}).get("body", "")
-                                        if user_id and text:
-                                            messages.append((user_id, text))
-            return messages
-        except Exception as e:
-            logger.error(f"Error extracting WhatsApp message: {e}", exc_info=True)
-            return []
+        self.router = APIRouter()
+        self._setup_routes()
+        
+    def _setup_routes(self):
+        @self.router.get("/webhook")
+        async def verify_webhook(request: Request):
+            """
+            Verify webhook endpoint for WhatsApp API.
+            """
+            try:
+                # Get query parameters
+                params = dict(request.query_params)
+                logger.info(f"Webhook verification request params: {params}")
+                
+                # Extract verification parameters
+                mode = params.get("hub.mode")
+                token = params.get("hub.verify_token")
+                challenge = params.get("hub.challenge")
+                
+                # Verify token
+                if mode == "subscribe" and token == self.verify_token:
+                    if not challenge:
+                        raise ValueError("Missing hub.challenge")
+                    logger.info("Webhook verified successfully")
+                    return Response(content=challenge, media_type="text/plain")
+                    
+                raise ValueError("Invalid verification token")
+                
+            except ValueError as e:
+                logger.error(f"Invalid challenge format: {e}")
+                raise ValueError("Invalid challenge format")
+            except Exception as e:
+                logger.error(f"Webhook verification failed: {e}")
+                raise ValueError("Webhook verification failed")
 
-    async def process_webhook(
-        self,
-        data: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Process an incoming webhook request.
-        
-        Args:
-            data: The webhook payload
-            
-        Returns:
-            List[Dict[str, Any]]: List of responses for each processed message
-        """
-        try:
-            responses = []
-            
-            # Extract messages from WhatsApp format
-            messages = self.extract_whatsapp_message(data)
-            
-            # Process each message
-            for user_id, message in messages:
-                try:
-                    # Process the message using the chat service
-                    response, profile_data = await chat_service.process_message(
-                        user_id=user_id,
-                        message=message
-                    )
+        @self.router.post("/webhook")
+        async def handle_webhook(request: Request) -> Dict[str, Any]:
+            """
+            Handle incoming webhook events from WhatsApp.
+            """
+            try:
+                data = await request.json()
+                logger.debug(f"Received webhook data: {json.dumps(data, indent=2)}")
+                
+                # Extract message details
+                entry = data.get("entry", [{}])[0]
+                changes = entry.get("changes", [{}])[0]
+                value = changes.get("value", {})
+                
+                # Handle message events
+                if "messages" in value:
+                    message = value["messages"][0]
+                    contact = value.get("contacts", [{}])[0]
                     
-                    responses.append({
-                        "status": "success",
-                        "response": response,
-                        "profile": profile_data,
-                        "user_id": user_id
-                    })
+                    # Extract user info
+                    phone_number = contact.get("wa_id")
+                    if not phone_number:
+                        logger.error("No phone number found in webhook data")
+                        return {"status": "error", "message": "No phone number found"}
+                        
+                    user_id = f"wa_{phone_number}"
                     
-                except Exception as e:
-                    logger.error(f"Error processing message for user {user_id}: {e}", exc_info=True)
-                    responses.append({
-                        "status": "error",
-                        "error": str(e),
-                        "user_id": user_id
-                    })
-            
-            return responses
-            
-        except Exception as e:
-            logger.error(f"Error processing webhook: {e}", exc_info=True)
-            raise
+                    # Extract message content
+                    message_type = message.get("type", "")
+                    if message_type != "text":
+                        logger.warning(f"Unsupported message type: {message_type}")
+                        return {"status": "error", "message": "Unsupported message type"}
+                        
+                    text = message.get("text", {}).get("body", "").strip()
+                    if not text:
+                        logger.warning("Empty message received")
+                        return {"status": "error", "message": "Empty message"}
+                        
+                    # Generate a unique message ID
+                    message_id = message.get("id", str(uuid4()))
+                    
+                    # Log the incoming message
+                    logger.info(f"Processing message from {user_id}: {text}")
+                    
+                    try:
+                        # Process the message
+                        response = await chat_service.process_message(
+                            user_id=user_id,
+                            message_text=text,
+                            message_id=message_id
+                        )
+                        
+                        return {
+                            "status": "success",
+                            "message": "Message processed successfully",
+                            "response": response
+                        }
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing message from {user_id}: {e}", exc_info=True)
+                        return {
+                            "status": "error",
+                            "message": "Error processing message",
+                            "error": str(e)
+                        }
+                        
+                # Handle verification requests
+                elif "challenge" in data:
+                    challenge = data["challenge"]
+                    return Response(content=challenge, media_type="text/plain")
+                    
+                return {"status": "success", "message": "Webhook received"}
+                
+            except Exception as e:
+                logger.error(f"Error processing webhook: {e}", exc_info=True)
+                return {"status": "error", "message": str(e)}
 
 # Create a single instance
-webhook_service = WebhookService() 
+webhook_service = WebhookService()
+# Export both the service instance and the router
+router = webhook_service.router 

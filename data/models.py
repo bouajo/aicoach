@@ -3,7 +3,7 @@ Modèles de données (Pydantic) et enum pour la conversation.
 """
 
 from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TypedDict
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 
@@ -41,58 +41,34 @@ class ConversationState(str, Enum):
         }
         return states_flow.get(self, self)
 
-class ConversationMessage(BaseModel):
-    """Message in a conversation."""
+class ConversationMessage(TypedDict):
+    id: str
     user_id: str
-    role: str = Field(..., description="Role of the message sender (user/assistant)")
-    content: str = Field(..., description="Content of the message")
-    created_at: datetime = Field(default_factory=datetime.now)
+    role: str  # 'user' or 'assistant'
+    content: str
+    created_at: str
 
-class UserProfile(BaseModel):
-    """User profile data model."""
+class ConversationSummary(TypedDict):
     user_id: str
-    first_name: Optional[str] = None
-    language: Optional[str] = None  # ISO 639-1 language code
-    language_name: Optional[str] = None  # Full language name
-    is_rtl: bool = False  # Whether the user's language is right-to-left
-    age: Optional[int] = None
-    height_cm: Optional[int] = None
-    start_weight: Optional[float] = None
-    current_weight: Optional[float] = None
-    target_weight: Optional[float] = None
-    target_date: Optional[date] = None
-    diet_preferences: Optional[List[str]] = None
-    diet_restrictions: Optional[List[str]] = None
-    conversation_state: str = ConversationState.LANGUAGE_DETECTION.value
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    summary: str
+    created_at: str
+    updated_at: str
+    last_message_id: str  # Reference to the last message included in this summary
 
-    @property
-    def is_complete(self) -> bool:
-        """Vérifie si toutes les informations requises sont présentes."""
-        return all([
-            self.first_name,
-            self.age,
-            self.height_cm,
-            self.start_weight,
-            self.target_weight,
-            self.target_date
-        ])
-
-    def next_required_field(self) -> Optional[str]:
-        """Retourne le prochain champ requis."""
-        required_fields = [
-            "first_name",
-            "age",
-            "height_cm",
-            "start_weight",
-            "target_weight",
-            "target_date"
-        ]
-        for field in required_fields:
-            if not getattr(self, field):
-                return field
-        return None
+class UserProfile(TypedDict):
+    user_id: str
+    first_name: Optional[str]
+    age: Optional[int]
+    height_cm: Optional[float]
+    current_weight: Optional[float]
+    target_weight: Optional[float]
+    language: Optional[str]
+    language_name: Optional[str]
+    is_rtl: Optional[bool]
+    created_at: str
+    updated_at: str
+    last_interaction: Optional[str]
+    onboarding_completed: Optional[bool]
 
 class UserGoals(BaseModel):
     weight_loss: Optional[float] = None
@@ -113,9 +89,10 @@ class DietPlan(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class UserContext(BaseModel):
-    """User context data model."""
+class UserContext(TypedDict):
     user_id: str
-    conversation_summary: Optional[str] = None
-    last_interaction: datetime = Field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    conversation_summary: str
+    last_topics: list[str]
+    last_interaction: str
+    created_at: str
+    updated_at: str

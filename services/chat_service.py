@@ -1,303 +1,246 @@
-# file: services/chat_service.py
+"""
+Service for handling chat interactions and user profile management.
+"""
 
 import logging
-from typing import Tuple, Dict, Any, List
-from data.models import UserProfile, ConversationState
-from data.database import db
-from services.conversation_service import conversation_service
-from services.language_detection import detect_language
-from managers.prompt_manager import prompt_manager
+from typing import Dict, Any, Optional
+from datetime import datetime
+
 from deepseek_agent import call_deepseek, summarize_text
-import json
-from datetime import datetime, timedelta
+from managers.diet_agent import build_diet_agent_prompt
+from services.language_detection import detect_language
+from data.database import db
+from config.chat_config import (
+    MESSAGES_BEFORE_SUMMARY,
+    SUPPORTED_LANGUAGES,
+    LANGUAGE_SELECTION_MAP,
+    VALIDATION_RULES,
+    DEEPSEEK_SETTINGS,
+    get_welcome_message,
+    get_language_confirmation,
+    get_error_message
+)
 
 logger = logging.getLogger(__name__)
 
-MESSAGES_BEFORE_SUMMARY = 5  # Number of messages before creating a new summary
-
 class ChatService:
-    async def _update_conversation_summary(self, user_id: str, recent_messages: List[Dict[str, Any]]) -> None:
-        """
-        Update the conversation summary in the user context.
-        
-        Args:
-            user_id: User ID
-            recent_messages: List of recent messages
-        """
-        try:
-            # Extract user messages only
-            user_texts = [m.content for m in recent_messages if m.role == "user"]
-            if not user_texts:
-                return
-                
-            full_user_text = "\n".join(user_texts)
-            
-            # Generate new summary
-            partial_summary = await summarize_text(
-                question="User's conversation so far",
-                user_answer=full_user_text
-            )
-            
-            # Get current context and merge summaries
-            current_context = await db.get_user_context(user_id) or {}
-            old_summary = current_context.get("conversation_summary", "")
-            
-            # Merge summaries, keeping only the most relevant parts
-            new_summary = old_summary + "\n" + partial_summary if old_summary else partial_summary
-            
-            # Update context with new summary
-            current_context["conversation_summary"] = new_summary.strip()
-            await db.update_user_context(user_id, current_context)
-            
-        except Exception as e:
-            logger.error(f"Error updating conversation summary: {e}", exc_info=True)
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
 
-    async def _get_response_with_context(
+    async def process_message(
         self,
         user_id: str,
-        message: str,
-        language: str,
-        current_state: ConversationState
-    ) -> str:
-        try:
-            user_context = await db.get_user_context(user_id) or {}
-            conversation_summary = user_context.get("conversation_summary", "")
+        message_text: str,
+        message_id: str
+    ) -> Dict[str, Any]:
+        """
+        Process an incoming message and generate a response using the diet agent.
+        
+        Args:
+            user_id: The unique identifier for the user
+            message_text: The text content of the message
+            message_id: The unique identifier for the message
             
-            # Get system prompt from prompt manager
-            system_prompt = prompt_manager.get_system_prompt(
-                language=language,
-                current_state=current_state,
-                context={
-                    "conversation_summary": conversation_summary,
-                    **user_context
+        Returns:
+            Dict containing the response details
+        """
+        try:
+            # Get or create user profile
+            user_profile = await db.get_user_profile(user_id)
+            is_new_user = user_profile is None
+            
+            if is_new_user:
+                # Create new user profile with detected language
+                detected_lang = await detect_language(message_text)
+                user_profile = {
+                    "user_id": user_id,
+                    "language_code": detected_lang["language_code"],
+                    "language_confirmed": False,
+                    "onboarding_completed": False,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+                await db.update_user_profile(user_id, user_profile)
+                
+                # Send welcome message in detected language
+                welcome_msg = get_welcome_message(detected_lang["language_code"])
+                await db.add_message(
+                    user_id=user_id,
+                    role="assistant",
+                    content=welcome_msg
+                )
+                return {"text": welcome_msg}
+            
+            # Handle language selection for new users
+            if not user_profile.get("language_confirmed", False):
+                if message_text in LANGUAGE_SELECTION_MAP:
+                    selected_lang = LANGUAGE_SELECTION_MAP[message_text]
+                    lang_info = SUPPORTED_LANGUAGES[selected_lang]
+                    await db.update_user_profile(
+                        user_id=user_id,
+                        data={
+                            "language_code": selected_lang,
+                            "language_confirmed": True,
+                            "language": selected_lang,  # For compatibility with diet agent
+                            "language_name": lang_info["name"],
+                            "is_rtl": lang_info["is_rtl"],
+                            "updated_at": datetime.utcnow().isoformat()
+                        }
+                    )
+                    confirmation_msg = get_language_confirmation(selected_lang)
+                    await db.add_message(
+                        user_id=user_id,
+                        role="assistant",
+                        content=confirmation_msg
+                    )
+                    return {"text": confirmation_msg}
+                else:
+                    # Re-send welcome message if invalid selection
+                    welcome_msg = get_welcome_message(user_profile["language_code"])
+                    return {"text": welcome_msg}
+            
+            # Save user message
+            await db.add_message(
+                user_id=user_id,
+                role="user",
+                content=message_text
+            )
+            
+            # Maybe update conversation summary
+            await self._maybe_update_summary(user_id)
+            
+            # Get conversation context and history
+            context = await db.get_user_context(user_id)
+            conversation_summary = context["conversation_summary"] if context else ""
+            
+            # Build diet agent prompt
+            system_prompt = build_diet_agent_prompt(
+                user_profile=user_profile,
+                conversation_summary=conversation_summary,
+                user_language=user_profile.get("language_code")
+            )
+            
+            # Get recent messages for context
+            recent_messages = await db.get_recent_messages(user_id, limit=10)
+            messages = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in recent_messages
+            ]
+            
+            # Call DeepSeek with diet agent prompt
+            response = await call_deepseek(
+                system_prompt=system_prompt,
+                user_messages=messages,
+                temperature=DEEPSEEK_SETTINGS["default_temperature"]
+            )
+            
+            # Save assistant response
+            await db.add_message(
+                user_id=user_id,
+                role="assistant",
+                content=response
+            )
+            
+            # Try to extract and update user info from the message
+            await self._try_update_user_info(user_id, message_text, user_profile)
+            
+            # Update last interaction time
+            await db.update_user_profile(
+                user_id=user_id,
+                data={
+                    "last_interaction": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
                 }
             )
             
-            messages = [{"role": "user", "content": message}]
-            return await call_deepseek(system_prompt, messages)
+            return {"text": response}
             
         except Exception as e:
-            logger.error(f"Error getting response with context: {e}", exc_info=True)
-            return await call_deepseek(prompt_manager.get_error_prompt(language), [])
-
-    async def _analyze_user_response(
-        self,
-        message: str,
-        current_state: ConversationState,
-        language: str,
-        context: Dict[str, Any]
-    ) -> Tuple[bool, Any, str]:
-        """
-        Analyze user response using DeepSeek and extract relevant information.
-        """
-        try:
-            analysis_prompt = prompt_manager.get_analysis_prompt(
-                current_state=current_state,
-                message=message,
-                language=language,
-                context=context
-            )
-            
-            analysis_result = await call_deepseek(analysis_prompt, [{"role": "user", "content": message}])
-            try:
-                result = json.loads(analysis_result)
-                return result["is_valid"], result["value"], result.get("error", "")
-            except:
-                logger.error(f"Failed to parse analysis result: {analysis_result}")
-                return False, None, await call_deepseek(prompt_manager.get_error_prompt(language), [])
-                
-        except Exception as e:
-            logger.error(f"Error analyzing user response: {e}", exc_info=True)
-            return False, None, await call_deepseek(prompt_manager.get_error_prompt(language), [])
-
-    async def _ensure_user_exists(self, user_id: str) -> Dict[str, Any]:
-        """
-        Ensure user exists in database, create if not.
-        
-        Args:
-            user_id: User ID
-            
-        Returns:
-            User profile data
-        """
-        try:
-            # Try to get existing user
-            profile_data = await db.get_user_profile(user_id)
-            if profile_data:
-                return profile_data
-
-            # Create new user with minimal data
-            new_profile = {
-                "user_id": user_id,
-                "conversation_state": ConversationState.LANGUAGE_DETECTION.value,
-                "language": "en",  # Default to English until detected
-                "language_name": "English",
-                "is_rtl": False
-            }
-            
-            # Ensure user is created before proceeding
-            success = await db.update_user_profile(user_id, new_profile)
-            if not success:
-                logger.error(f"Failed to create user profile for {user_id}")
-                raise ValueError("Failed to create user profile")
-                
-            # Get the created profile
-            profile_data = await db.get_user_profile(user_id)
-            if not profile_data:
-                logger.error(f"Failed to retrieve created user profile for {user_id}")
-                raise ValueError("Failed to retrieve created user profile")
-                
-            return profile_data
-            
-        except Exception as e:
-            logger.error(f"Error ensuring user exists: {e}", exc_info=True)
-            # Return a default profile in case of error
-            return {
-                "user_id": user_id,
-                "conversation_state": ConversationState.LANGUAGE_DETECTION.value,
-                "language": "en",
-                "language_name": "English",
-                "is_rtl": False
-            }
+            self.logger.error(f"Error processing message: {e}", exc_info=True)
+            error_msg = get_error_message(user_profile["language_code"] if user_profile else "en")
+            return {"text": error_msg}
 
     async def _maybe_update_summary(self, user_id: str) -> None:
         """
-        Check if we need to update the conversation summary and do so if needed.
-        
-        Args:
-            user_id: User ID
+        If we have >= MESSAGES_BEFORE_SUMMARY new messages, generate a summary
+        and update conversation_summaries.
         """
+        recent_msgs = await db.get_recent_messages(user_id, limit=MESSAGES_BEFORE_SUMMARY)
+        if len(recent_msgs) >= MESSAGES_BEFORE_SUMMARY:
+            try:
+                # Get current context
+                current_context = await db.get_user_context(user_id)
+                if not current_context:
+                    current_context = {
+                        "user_id": user_id,
+                        "conversation_summary": "",
+                        "last_topics": [],
+                        "last_interaction": datetime.utcnow().isoformat(),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+
+                # Extract messages for summarization
+                user_texts = [m["content"] for m in recent_msgs if m["role"] == "user"]
+                if not user_texts:
+                    return
+
+                # Generate new summary
+                partial_summary = await summarize_text(
+                    question=DEEPSEEK_SETTINGS["summarization_prompt"],
+                    user_answer="\n".join(user_texts)
+                )
+
+                # Merge with old summary
+                old_summary = current_context.get("conversation_summary", "")
+                new_summary = (old_summary + "\n" + partial_summary).strip()
+
+                # Update context
+                current_context["conversation_summary"] = new_summary
+                current_context["updated_at"] = datetime.utcnow().isoformat()
+                await db.update_user_context(user_id, current_context)
+
+            except Exception as e:
+                logger.error(f"Error generating summary: {e}")
+
+    async def _try_update_user_info(self, user_id: str, message: str, profile_data: Dict[str, Any]) -> None:
+        """Try to extract and update user info from their message."""
         try:
-            recent_messages = await conversation_service.get_recent_messages(user_id, limit=MESSAGES_BEFORE_SUMMARY)
-            if len(recent_messages) >= MESSAGES_BEFORE_SUMMARY:
-                await self._update_conversation_summary(user_id, recent_messages)
-        except Exception as e:
-            logger.error(f"Error checking/updating summary: {e}", exc_info=True)
-
-    async def process_message(self, user_id: str, message: str) -> Tuple[str, Dict[str, Any]]:
-        """
-        Process an incoming message from a user.
-        
-        Args:
-            user_id: The user's ID
-            message: The message content
+            # Simple number extraction - this could be enhanced with better parsing
+            words = message.lower().split()
             
-        Returns:
-            Tuple[str, Dict[str, Any]]: The response message and updated user profile
-        """
-        try:
-            profile_data = await self._ensure_user_exists(user_id)
-            current_state = ConversationState(profile_data.get("conversation_state", "language_detection"))
-            language = profile_data.get("language", "en")
+            # Look for numbers that might be age, weight, or height
+            for i, word in enumerate(words):
+                try:
+                    num = float(word.replace("kg", "").replace("cm", "").strip())
+                    
+                    # Try to determine the type of number based on context
+                    if "age" in message.lower() and VALIDATION_RULES["age"]["min"] <= num <= VALIDATION_RULES["age"]["max"]:
+                        profile_data["age"] = int(num)
+                    elif "height" in message.lower() and VALIDATION_RULES["height_cm"]["min"] <= num <= VALIDATION_RULES["height_cm"]["max"]:
+                        profile_data["height_cm"] = int(num)
+                    elif "weight" in message.lower() and VALIDATION_RULES["weight"]["min"] <= num <= VALIDATION_RULES["weight"]["max"]:
+                        if "target" in message.lower():
+                            profile_data["target_weight"] = num
+                        else:
+                            profile_data["current_weight"] = num
+                            
+                except ValueError:
+                    continue
+                    
+            # Look for name if it's missing
+            if not profile_data.get("first_name") and len(message.split()) <= 5:  # Likely just a name
+                name = message.strip().split()[0].title()
+                if len(name) >= VALIDATION_RULES["name_min_length"]:
+                    profile_data["first_name"] = name
 
-            # Store message
-            await conversation_service.add_message(user_id, "user", message)
-            
-            # Maybe update summary if enough messages
-            await self._maybe_update_summary(user_id)
-
-            # Handle language detection
-            if current_state == ConversationState.LANGUAGE_DETECTION:
-                # Get full language details
-                language_details = await detect_language(message)
-                
-                # Update profile with language information
-                profile_data["language"] = language_details["language_code"]
-                profile_data["language_name"] = language_details["language_name"]
-                profile_data["is_rtl"] = language_details["is_rtl"]
-                profile_data["conversation_state"] = ConversationState.INTRODUCTION.value
+            # Update profile if we found any new information
+            if profile_data != await db.get_user_profile(user_id):
+                profile_data["updated_at"] = datetime.utcnow().isoformat()
                 await db.update_user_profile(user_id, profile_data)
                 
-                # Get introduction prompt
-                response = prompt_manager.get_user_prompt(
-                    current_state=ConversationState.INTRODUCTION,
-                    language=language_details["language_code"],
-                    context=profile_data
-                )
-                
-                if not response:  # Fallback to DeepSeek if no template
-                    # Include language details in the system prompt
-                    system_prompt = prompt_manager.get_system_prompt(
-                        language=language_details["language_code"],
-                        current_state=ConversationState.INTRODUCTION,
-                        context={
-                            **profile_data,
-                            "language_name": language_details["language_name"],
-                            "is_rtl": language_details["is_rtl"]
-                        }
-                    )
-                    response = await call_deepseek(system_prompt, [])
-                
-                await conversation_service.add_message(user_id, "assistant", response)
-                return response, profile_data
-
-            # For all other states, analyze the response first
-            is_valid, extracted_value, error_message = await self._analyze_user_response(
-                message=message,
-                current_state=current_state,
-                language=language,
-                context=profile_data
-            )
-            
-            if not is_valid:
-                return error_message, profile_data
-
-            # Update profile with extracted value
-            if current_state == ConversationState.NAME_COLLECTION:
-                profile_data["first_name"] = extracted_value
-            elif current_state == ConversationState.AGE_COLLECTION:
-                profile_data["age"] = extracted_value
-            elif current_state == ConversationState.HEIGHT_COLLECTION:
-                profile_data["height_cm"] = extracted_value
-            elif current_state == ConversationState.START_WEIGHT_COLLECTION:
-                profile_data["start_weight"] = extracted_value
-                profile_data["current_weight"] = extracted_value
-            elif current_state == ConversationState.GOAL_COLLECTION:
-                profile_data["target_weight"] = extracted_value
-            elif current_state == ConversationState.TARGET_DATE_COLLECTION:
-                target_date = datetime.now() + timedelta(weeks=extracted_value)
-                profile_data["target_date"] = target_date.date().isoformat()
-            elif current_state == ConversationState.DIET_PREFERENCES:
-                profile_data["diet_preferences"] = extracted_value
-            elif current_state == ConversationState.DIET_RESTRICTIONS:
-                profile_data["diet_restrictions"] = extracted_value
-
-            # Move to next state
-            next_state = current_state.next_state()
-            profile_data["conversation_state"] = next_state.value
-            await db.update_user_profile(user_id, profile_data)
-
-            # Get next prompt from prompt manager
-            response = prompt_manager.get_user_prompt(
-                current_state=next_state,
-                language=language,
-                context=profile_data
-            )
-            
-            if not response:  # Fallback to DeepSeek if no template
-                system_prompt = prompt_manager.get_system_prompt(
-                    language=language,
-                    current_state=next_state,
-                    context={
-                        **profile_data,
-                        "language_name": profile_data.get("language_name", "Unknown"),
-                        "is_rtl": profile_data.get("is_rtl", False)
-                    }
-                )
-                response = await call_deepseek(system_prompt, [])
-            
-            await conversation_service.add_message(user_id, "assistant", response)
-            return response, profile_data
-
         except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
-            # Return a default error response in English
-            error_response = "I encountered an error. Please try again."
-            return error_response, profile_data or {
-                "user_id": user_id,
-                "language": "en",
-                "conversation_state": ConversationState.LANGUAGE_DETECTION.value
-            }
+            logger.error(f"Error updating user info: {e}")
 
-# Create a single global instance
+# Create a single instance
 chat_service = ChatService()

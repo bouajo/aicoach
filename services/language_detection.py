@@ -3,92 +3,76 @@ Service for language detection using DeepSeek.
 """
 
 import logging
-import json
 from typing import Dict, Any
 from deepseek_agent import call_deepseek
 
 logger = logging.getLogger(__name__)
 
-LANGUAGE_DETECTION_PROMPT = """You are a universal language detection expert. Analyze the following text and determine:
-1. The language being used
-2. The ISO 639-1 two-letter language code
-3. The confidence level of your detection
-
-Return your analysis as a JSON object with the following structure:
-{{
-    "language_name": "string",  // Full name of the language
-    "language_code": "string",  // ISO 639-1 two-letter code
-    "confidence": float,        // Confidence level (0-1)
-    "is_rtl": boolean          // Whether it's a right-to-left language
-}}
-
-Text to analyze: {text}
-
-Respond ONLY with the JSON object, no other text."""
+LANGUAGE_INFO = {
+    "fr": {
+        "language_code": "fr",
+        "language_name": "French",
+        "is_rtl": False,
+        "native_name": "Français"
+    },
+    "en": {
+        "language_code": "en",
+        "language_name": "English",
+        "is_rtl": False,
+        "native_name": "English"
+    },
+    "es": {
+        "language_code": "es",
+        "language_name": "Spanish",
+        "is_rtl": False,
+        "native_name": "Español"
+    },
+    "ar": {
+        "language_code": "ar",
+        "language_name": "Arabic",
+        "is_rtl": True,
+        "native_name": "العربية"
+    },
+    "it": {
+        "language_code": "it",
+        "language_name": "Italian",
+        "is_rtl": False,
+        "native_name": "Italiano"
+    }
+}
 
 async def detect_language(text: str) -> Dict[str, Any]:
     """
-    Detect the language of the given text using DeepSeek.
+    Detect the language of a text using DeepSeek.
     
     Args:
         text: Text to analyze
         
     Returns:
-        Dict containing language details:
-        - language_name: Full name of the language
-        - language_code: ISO 639-1 two-letter code
-        - confidence: Detection confidence (0-1)
-        - is_rtl: Whether it's a right-to-left language
+        Dict with language information
     """
     try:
-        # Prepare the messages for DeepSeek
-        system_prompt = LANGUAGE_DETECTION_PROMPT.format(text=text)
+        system_prompt = """
+        You are a language detection expert. Analyze the following text and determine its language.
+        Respond ONLY with the 2-letter language code (en, fr, es, ar, it).
+        If unsure or if the language is not in the list, respond with 'en'.
+        """
         
-        # Get language analysis from DeepSeek
         response = await call_deepseek(
             system_prompt=system_prompt,
-            user_messages=[],
-            temperature=0.1  # Low temperature for more precise detection
+            user_messages=[{"role": "user", "content": text}],
+            temperature=0.1
         )
         
-        try:
-            # Parse the JSON response
-            result = json.loads(response)
-            
-            # Validate required fields
-            required_fields = ["language_name", "language_code", "confidence", "is_rtl"]
-            for field in required_fields:
-                if field not in result:
-                    raise ValueError(f"Missing required field: {field}")
-            
-            # Log the detection details
-            logger.info(
-                f"Language detected: {result['language_name']} "
-                f"({result['language_code']}) with "
-                f"{result['confidence']*100:.1f}% confidence"
-            )
-            
-            return result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse language detection response: {response}")
-            # Return English as fallback
-            return {
-                "language_name": "English",
-                "language_code": "en",
-                "confidence": 1.0,
-                "is_rtl": False
-            }
+        # Clean up response and get language code
+        lang_code = response.strip().lower()[:2]
+        
+        # Get language info or default to English
+        return LANGUAGE_INFO.get(lang_code, LANGUAGE_INFO["en"])
         
     except Exception as e:
         logger.error(f"Error detecting language: {e}", exc_info=True)
-        # Return English as fallback
-        return {
-            "language_name": "English",
-            "language_code": "en",
-            "confidence": 1.0,
-            "is_rtl": False
-        }
+        return LANGUAGE_INFO["en"]
 
 async def get_language_details(text: str) -> Dict[str, Any]:
     """

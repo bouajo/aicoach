@@ -1,15 +1,15 @@
 """
-Services package: handles AI interactions and external services.
+Service layer initialization.
 """
 
-from .ai_service import ai_service
 from .chat_service import chat_service
 from .conversation_service import conversation_service
-from .whatsapp_service import router as whatsapp_router
+from .webhook_service import router as webhook_router
+from .language_detection import detect_language
 
 __all__ = [
-    "ai_service",
-    "chat_service",
-    "conversation_service",
-    "whatsapp_router"
+    'chat_service',
+    'conversation_service',
+    'webhook_router',
+    'detect_language'
 ] 

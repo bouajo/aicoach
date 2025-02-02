@@ -22,10 +22,14 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize Supabase client
+# Initialize Supabase client with service role key
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+if not SUPABASE_KEY:
+    raise ValueError("SUPABASE_KEY is required in .env file")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+logger.info("Initialized Supabase client with service role key")
 
 # SQL for creating tables (to be executed in Supabase SQL editor)
 SETUP_SQL = """
