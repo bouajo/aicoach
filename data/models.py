@@ -8,9 +8,8 @@ from datetime import datetime, date
 from pydantic import BaseModel, Field
 
 class ConversationState(str, Enum):
+    LANGUAGE_DETECTION = "language_detection"
     INTRODUCTION = "introduction"
-    LANGUAGE_SELECTION = "language_selection"
-    LANGUAGE_CONFIRMATION = "language_confirmation"
     NAME_COLLECTION = "name_collection"
     AGE_COLLECTION = "age_collection"
     HEIGHT_COLLECTION = "height_collection"
@@ -26,9 +25,8 @@ class ConversationState(str, Enum):
     def next_state(self) -> 'ConversationState':
         """Returns the next state in the conversation flow."""
         states_flow = {
-            ConversationState.INTRODUCTION: ConversationState.LANGUAGE_SELECTION,
-            ConversationState.LANGUAGE_SELECTION: ConversationState.LANGUAGE_CONFIRMATION,
-            ConversationState.LANGUAGE_CONFIRMATION: ConversationState.NAME_COLLECTION,
+            ConversationState.LANGUAGE_DETECTION: ConversationState.INTRODUCTION,
+            ConversationState.INTRODUCTION: ConversationState.NAME_COLLECTION,
             ConversationState.NAME_COLLECTION: ConversationState.AGE_COLLECTION,
             ConversationState.AGE_COLLECTION: ConversationState.HEIGHT_COLLECTION,
             ConversationState.HEIGHT_COLLECTION: ConversationState.START_WEIGHT_COLLECTION,
@@ -43,20 +41,31 @@ class ConversationState(str, Enum):
         }
         return states_flow.get(self, self)
 
+class ConversationMessage(BaseModel):
+    """Message in a conversation."""
+    user_id: str
+    role: str = Field(..., description="Role of the message sender (user/assistant)")
+    content: str = Field(..., description="Content of the message")
+    created_at: datetime = Field(default_factory=datetime.now)
+
 class UserProfile(BaseModel):
     """User profile data model."""
     user_id: str
-    conversation_state: str = "introduction"
-    language: str = "français"
     first_name: Optional[str] = None
+    language: Optional[str] = None  # ISO 639-1 language code
+    language_name: Optional[str] = None  # Full language name
+    is_rtl: bool = False  # Whether the user's language is right-to-left
     age: Optional[int] = None
     height_cm: Optional[int] = None
     start_weight: Optional[float] = None
     current_weight: Optional[float] = None
     target_weight: Optional[float] = None
     target_date: Optional[date] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    diet_preferences: Optional[List[str]] = None
+    diet_restrictions: Optional[List[str]] = None
+    conversation_state: str = ConversationState.LANGUAGE_DETECTION.value
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
     @property
     def is_complete(self) -> bool:
@@ -104,16 +113,9 @@ class DietPlan(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class ConversationMessage(BaseModel):
-    """Conversation message data model."""
+class UserContext(BaseModel):
+    """User context data model."""
     user_id: str
-    role: str  # "user" ou "assistant"
-    content: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-    def dict(self, *args, **kwargs) -> Dict[str, Any]:
-        """Surcharge pour formater les dates en ISO."""
-        d = super().dict(*args, **kwargs)
-        if "created_at" in d:
-            d["created_at"] = d["created_at"].isoformat()
-        return d
+    conversation_summary: Optional[str] = None
+    last_interaction: datetime = Field(default_factory=datetime.now)
+    metadata: Dict[str, Any] = Field(default_factory=dict)

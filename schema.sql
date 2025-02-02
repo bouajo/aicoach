@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     conversation_state TEXT NOT NULL DEFAULT 'introduction',
-    language TEXT NOT NULL DEFAULT 'français',
+    language TEXT DEFAULT NULL,
     first_name TEXT,
     age INTEGER,
     height INTEGER,
@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS user_context (
     profile JSONB NOT NULL DEFAULT '{}',
     goals JSONB NOT NULL DEFAULT '{}',
     conversation_history JSONB NOT NULL DEFAULT '[]',
+    conversation_summary TEXT,
     last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

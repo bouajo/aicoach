@@ -1,106 +1,82 @@
 """
-Service for managing conversation history (database read/write).
+Service for managing conversation history and messages.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-from data.models import ConversationMessage, UserProfile
+from typing import Dict, Any, List, Optional
 from data.database import db
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class ConversationService:
-    async def add_message(self, user_id: str, role: str, content: str) -> None:
+    async def add_message(self, user_id: str, role: str, content: str) -> bool:
         """
         Add a message to the conversation history.
         
         Args:
-            user_id: User ID
+            user_id: The user's ID
             role: Message role (user/assistant)
             content: Message content
+            
+        Returns:
+            bool: True if successful
         """
         try:
-            message = ConversationMessage(
-                user_id=user_id,
-                role=role,
-                content=content
-            )
-            await db.add_conversation_message(message)
+            return await db.add_message(user_id, role, content)
         except Exception as e:
             logger.error(f"Error adding message for {user_id}: {e}", exc_info=True)
+            return False
 
-    async def get_recent_messages(
-        self, user_id: str, limit: int = 5
-    ) -> List[ConversationMessage]:
+    async def get_recent_messages(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Get recent messages from a conversation.
+        Get recent messages for a user.
         
         Args:
-            user_id: User ID
+            user_id: The user's ID
             limit: Maximum number of messages to return
             
         Returns:
-            List of recent messages
+            List[Dict[str, Any]]: List of recent messages
         """
         try:
-            rows = await db.get_conversation_history(user_id, limit)
-            return [ConversationMessage(**r) for r in rows]
+            return await db.get_recent_messages(user_id, limit)
         except Exception as e:
-            logger.error(f"Error getting messages for {user_id}: {e}", exc_info=True)
+            logger.error(f"Error getting recent messages for {user_id}: {e}", exc_info=True)
             return []
 
-    async def get_conversation_summary(self, user_id: str) -> str:
+    async def get_conversation_history(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Generate a summary of the user's recent messages.
+        Get conversation history for a user.
         
         Args:
-            user_id: User ID
+            user_id: The user's ID
+            limit: Maximum number of messages to return
             
         Returns:
-            Summary of messages
+            List[Dict[str, Any]]: List of messages in chronological order
         """
         try:
-            messages = await self.get_recent_messages(user_id, limit=3)
-            user_messages = [
-                msg.content for msg in messages 
-                if msg.role == "user"
-            ]
-            return "\n".join(user_messages)
+            return await db.get_conversation_history(user_id, limit)
         except Exception as e:
-            logger.error(f"Error getting summary for {user_id}: {e}", exc_info=True)
-            return ""
+            logger.error(f"Error getting conversation history for {user_id}: {e}", exc_info=True)
+            return []
 
-    async def clear_conversation_history(self, user_id: str) -> None:
+    async def clear_history(self, user_id: str) -> bool:
         """
-        Clear a user's conversation history.
+        Clear conversation history for a user.
         
         Args:
-            user_id: User ID
+            user_id: The user's ID
+            
+        Returns:
+            bool: True if successful
         """
         try:
-            await db.delete_conversation_history(user_id)
+            return await db.delete_conversation_history(user_id)
         except Exception as e:
             logger.error(f"Error clearing history for {user_id}: {e}", exc_info=True)
+            return False
 
-    async def get_messages_by_state(
-        self, user_id: str, state: str, limit: int = 5
-    ) -> List[ConversationMessage]:
-        """
-        Get conversation messages for a specific state.
-        
-        Args:
-            user_id: User ID
-            state: Conversation state
-            limit: Maximum number of messages
-            
-        Returns:
-            List of messages for the state
-        """
-        try:
-            rows = await db.get_messages_by_state(user_id, state, limit)
-            return [ConversationMessage(**r) for r in rows]
-        except Exception as e:
-            logger.error(f"Error getting messages by state for {user_id}: {e}", exc_info=True)
-            return []
-
+# Create a single instance
 conversation_service = ConversationService() 
