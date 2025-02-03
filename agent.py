@@ -516,26 +516,26 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
         logger.info("=" * 50)
 
         # Get user profile and handle None case properly
-    user_profile = db.get_user_profile(phone_number)
+        user_profile = await db.get_user_profile(phone_number)
         logger.info(f"Retrieved user profile: {json.dumps(user_profile, indent=2) if user_profile else 'None'}")
         
         # Get user's language or use default
         user_lang = user_profile.get("language", DEFAULT_LANGUAGE) if user_profile else DEFAULT_LANGUAGE
         
         # New user flow
-    if not user_profile:
+        if not user_profile:
             logger.info(f"NEW USER DETECTED: {phone_number[-4:]}")
             
             # Create user profile
-            if not db.create_user_profile(phone_number):
+            if not await db.create_user_profile(phone_number):
                 logger.error("Failed to create user profile")
                 return await get_error_message("profile_creation_failed", user_lang)
             
             # Log messages
-            if not db.log_message(phone_number, "user", incoming_text):
+            if not await db.log_message(phone_number, "user", incoming_text):
                 logger.error("Failed to log user message")
             
-            if not db.log_message(phone_number, "assistant", WELCOME_MESSAGE):
+            if not await db.log_message(phone_number, "assistant", WELCOME_MESSAGE):
                 logger.error("Failed to log welcome message")
             
             logger.info("=" * 50)
@@ -543,7 +543,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             logger.info(WELCOME_MESSAGE)
             logger.info("=" * 50)
             
-        return WELCOME_MESSAGE
+            return WELCOME_MESSAGE
 
         # Language detection flow - check both missing language and undefined language
         if "language" not in user_profile or user_profile.get("language") == "und":
@@ -560,7 +560,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 }
                 logger.info(f"Updating user profile with: {json.dumps(updates, indent=2)}")
                 
-                if not db.update_user_profile(phone_number, updates):
+                if not await db.update_user_profile(phone_number, updates):
                     logger.error(f"Failed to store language for user: {phone_number[-4:]}")
                     return await get_error_message("language_detection_failed", user_lang)
                 
@@ -571,7 +571,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.info(coach_intro)
                 logger.info("=" * 50)
                 
-                if not db.log_message(phone_number, "assistant", coach_intro):
+                if not await db.log_message(phone_number, "assistant", coach_intro):
                     logger.error("Failed to log coach intro")
                 
                 return coach_intro
@@ -604,7 +604,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 
                 # Generate and store the plan
                 plan = await create_diet_plan(user_profile)
-                if not db.update_user_profile(phone_number, {
+                if not await db.update_user_profile(phone_number, {
                     "step": "chat",
                     "plan": plan,
                     "plan_created_at": datetime.utcnow().isoformat()
@@ -619,7 +619,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.info(response)
                 logger.info("=" * 50)
                 
-                if not db.log_message(phone_number, "assistant", response):
+                if not await db.log_message(phone_number, "assistant", response):
                     logger.error("Failed to log plan message")
                 
                 return response
@@ -641,12 +641,12 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             
             if field_value:
                 # Update the user profile with the new field value
-                if not db.update_user_profile(phone_number, field_value):
+                if not await db.update_user_profile(phone_number, field_value):
                     logger.error(f"Failed to store field value for user: {phone_number[-4:]}")
                     return await get_error_message("field_value_storage_failed", user_lang)
                 
                 # Refresh user profile after update
-                user_profile = db.get_user_profile(phone_number)
+                user_profile = await db.get_user_profile(phone_number)
                 if not user_profile:
                     logger.error("Failed to retrieve updated user profile")
                     return await get_error_message("user_profile_retrieval_failed", user_lang)
@@ -658,7 +658,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.info(next_question)
                 logger.info("=" * 50)
                 
-                if not db.log_message(phone_number, "assistant", next_question):
+                if not await db.log_message(phone_number, "assistant", next_question):
                     logger.error("Failed to log question message")
                 
                 return next_question
@@ -671,7 +671,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             logger.info(response)
             logger.info("=" * 50)
             
-            if not db.log_message(phone_number, "assistant", response):
+            if not await db.log_message(phone_number, "assistant", response):
                 logger.error("Failed to log clarification message")
             
             return response
@@ -690,9 +690,9 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
 
 async def create_diet_plan(user_profile: Dict[str, Any]) -> str:
     """Create a personalized diet plan based on user profile."""
-    system_prompt = f"""You are an expert diet and nutrition coach. Create a personalized plan based on this profile:
+    system_prompt = """You are an expert diet and nutrition coach. Create a personalized plan based on this profile:
     Profile:
-    {json.dumps(user_profile, indent=2)}
+    {profile}
     
     Include:
     1. Daily calorie target
@@ -702,7 +702,7 @@ async def create_diet_plan(user_profile: Dict[str, Any]) -> str:
     5. Weekly weight loss/gain target
     6. Key recommendations
     
-    Keep it concise but comprehensive."""
+    Keep it concise but comprehensive.""".format(profile=json.dumps(user_profile, indent=2))
     
     try:
         plan = await chat_completion(

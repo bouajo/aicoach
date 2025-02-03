@@ -39,56 +39,71 @@ class Database:
         """Convert phone number to deterministic UUID."""
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, phone_number))
 
-    def get_user_profile(self, phone_number: str) -> Optional[Dict[str, Any]]:
-        """Retrieve the user profile by phone_number."""
+    async def get_user_profile(self, phone_number: str) -> Optional[Dict[str, Any]]:
+        """Retrieve user profile from database."""
         try:
             uid = self.phone_to_uuid(phone_number)
-            resp = self.client.table("user_profiles").select("*").eq("user_id", uid).execute()
-            if resp.data:
+            resp = await self.client.table("user_profiles").select("*").eq("user_id", uid).execute()
+            
+            if resp.data and len(resp.data) > 0:
                 logger.info(f"Retrieved profile for user: {phone_number[-4:]}")
                 return resp.data[0]
+            
             logger.info(f"No profile found for user: {phone_number[-4:]}")
             return None
+            
         except Exception as e:
             logger.error(f"Error retrieving user profile: {e}")
             return None
 
-    def create_user_profile(self, phone_number: str) -> bool:
-        """Create a user profile for a new user."""
+    async def create_user_profile(self, phone_number: str) -> bool:
+        """Create new user profile."""
         try:
             uid = self.phone_to_uuid(phone_number)
             data = {
                 "user_id": uid,
                 "phone_number": phone_number,
-                "language": "und",  # undefined
+                "language": "und",
                 "step": "new"
             }
-            resp = self.client.table("user_profiles").insert(data).execute()
+            resp = await self.client.table("user_profiles").insert(data).execute()
+            
             if resp.data:
                 logger.info(f"Created profile for user: {phone_number[-4:]}")
                 return True
+                
             logger.error(f"Failed to create profile for user: {phone_number[-4:]}")
             return False
+            
         except Exception as e:
             logger.error(f"Error creating user profile: {e}")
             return False
 
-    def update_user_profile(self, phone_number: str, updates: Dict[str, Any]) -> bool:
-        """Update user profile fields."""
+    async def update_user_profile(self, phone_number: str, updates: Dict[str, Any]) -> bool:
+        """Update existing user profile."""
         try:
             uid = self.phone_to_uuid(phone_number)
+            
+            # Add updated_at timestamp
             updates["updated_at"] = "now()"
-            resp = self.client.table("user_profiles").update(updates).eq("user_id", uid).execute()
+            
+            resp = await self.client.table("user_profiles") \
+                .update(updates) \
+                .eq("user_id", uid) \
+                .execute()
+                
             if resp.data:
                 logger.info(f"Updated profile for user: {phone_number[-4:]} | Updates: {json.dumps(updates, indent=2)}")
                 return True
+                
             logger.error(f"Failed to update profile for user: {phone_number[-4:]}")
             return False
+            
         except Exception as e:
             logger.error(f"Error updating user profile: {e}")
             return False
 
-    def log_message(self, phone_number: str, role: str, content: str) -> bool:
+    async def log_message(self, phone_number: str, role: str, content: str) -> bool:
         """Store conversation message."""
         try:
             uid = self.phone_to_uuid(phone_number)
@@ -97,7 +112,7 @@ class Database:
                 "role": role,
                 "content": content
             }
-            resp = self.client.table("conversation_messages").insert(data).execute()
+            resp = await self.client.table("conversation_messages").insert(data).execute()
             if resp.data:
                 logger.info(f"Logged message for user: {phone_number[-4:]} | Role: {role}")
                 return True
@@ -108,24 +123,30 @@ class Database:
             return False
 
     async def send_whatsapp_message(self, to: str, text: str) -> bool:
-        """Call the Meta WhatsApp Cloud API to send text back to the user."""
+        """Send WhatsApp message using Meta's API."""
         try:
-            payload = {
+            data = {
                 "messaging_product": "whatsapp",
+                "recipient_type": "individual",
                 "to": to,
-                "text": {
-                    "body": text
-                }
+                "type": "text",
+                "text": {"body": text}
             }
+            
             async with httpx.AsyncClient() as client:
-                resp = await client.post(
+                response = await client.post(
                     self.whatsapp_base_url,
                     headers=self.whatsapp_headers,
-                    json=payload
+                    json=data
                 )
-                resp.raise_for_status()
-                logger.info(f"Sent WhatsApp message to: {to[-4:]}")
-                return True
+                
+                if response.status_code == 200:
+                    logger.info(f"Sent WhatsApp message to: {to[-4:]}")
+                    return True
+                    
+                logger.error(f"Failed to send WhatsApp message: {response.status_code} - {response.text}")
+                return False
+                
         except Exception as e:
             logger.error(f"Error sending WhatsApp message: {e}")
             return False
@@ -140,8 +161,11 @@ class Database:
             The last message text or None if not found
         """
         try:
-            response = self.client.table("conversation_messages").select("content") \
-                .eq("phone_number", phone_number) \
+            # Convert phone number to UUID for querying
+            uid = self.phone_to_uuid(phone_number)
+            
+            response = await self.client.table("conversation_messages").select("content") \
+                .eq("user_id", uid) \
                 .eq("role", "assistant") \
                 .order("created_at", desc=True) \
                 .limit(1) \
@@ -155,5 +179,5 @@ class Database:
             logger.error(f"Error getting last assistant message: {e}")
             return None
 
-# Create a singleton
+# Create a singleton instance
 db = Database()
