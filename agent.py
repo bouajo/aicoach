@@ -26,6 +26,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def clean_json_response(response: str) -> str:
+    """Remove markdown and other non-JSON content.
+    
+    Args:
+        response (str): Raw response potentially containing markdown and non-JSON content
+        
+    Returns:
+        str: Clean JSON string
+        
+    Example:
+        >>> clean_json_response('```json\n{"key": "value"}\n```')
+        '{"key": "value"}'
+    """
+    # Remove JSON code blocks
+    response = re.sub(r'```json\n?', '', response)
+    response = re.sub(r'\n```$', '', response)
+    
+    # Remove any non-JSON content before/after
+    start = response.find('{')
+    end = response.rfind('}') + 1
+    if start == -1 or end == 0:
+        logger.error("No valid JSON found in response")
+        return ""
+    return response[start:end].strip()
+
 # Language settings
 DEFAULT_LANGUAGE = "en"
 SUPPORTED_LANGUAGES = {
@@ -109,146 +134,99 @@ async def get_coach_intro(lang_code: str) -> str:
         # Generate a basic introduction as fallback
         return f"Hello! I'm Eric, your personal diet and fitness coach with over 20 years of experience. To start our journey together, could you please tell me what you'd like me to call you? 😊"
 
-# Enhanced profile fields with dynamic question generation
+# Profile field definitions with validation rules
 PROFILE_FIELDS = {
     "language": {
         "required": True,
-        "type": "language",
+        "type": "text",
+        "options": list(SUPPORTED_LANGUAGES.keys()),
         "context": {
-            "purpose": "Language preference for communication",
-            "importance": "Ensures clear and comfortable communication",
-            "cultural_context": "Respects linguistic and cultural preferences"
+            "purpose": "Communication language preference",
+            "importance": "Essential for proper communication"
         }
     },
     "name": {
         "required": True,
         "type": "text",
+        "min_length": 2,
+        "max_length": 50,
         "context": {
             "purpose": "Personal identification",
-            "importance": "Creates a personal connection",
-            "cultural_context": "Used for appropriate form of address"
+            "importance": "For personalized communication"
         }
     },
     "age": {
         "required": True,
         "type": "number",
+        "min_value": 18,
+        "max_value": 120,
         "context": {
             "purpose": "Age-appropriate recommendations",
-            "importance": "Affects metabolism and exercise capacity",
-            "medical_context": "Influences nutritional needs",
-            "extract_hints": ["years old", "yo", "years", "aged", "I am", "I'm"]
+            "importance": "Essential for health and dietary advice"
         }
     },
     "gender": {
         "required": True,
         "type": "text",
+        "options": ["homme", "femme"],
         "context": {
-            "purpose": "Personalized health recommendations",
-            "importance": "Affects nutritional needs and body composition",
-            "sensitivity": "Optional, respects privacy preferences",
-            "cultural_context": "Considers cultural norms"
+            "purpose": "Biological sex for medical recommendations",
+            "importance": "Essential for accurate metabolic calculations"
         }
     },
     "height": {
         "required": True,
-        "type": "measurement",
+        "type": "number",
+        "min_value": 100,  # cm
+        "max_value": 250,  # cm
         "context": {
-            "purpose": "Body composition calculations",
-            "importance": "Essential for BMI and health metrics",
-            "flexibility": "Accepts various measurement units",
-            "extract_hints": ["tall", "height", "cm", "feet", "ft", "inches", "'", "\""]
+            "purpose": "Height measurement for BMI calculation",
+            "importance": "Required for accurate health assessment"
         }
     },
     "start_weight": {
         "required": True,
-        "type": "weight",
+        "type": "number",
+        "min_value": 30,  # kg
+        "max_value": 300,  # kg
         "context": {
-            "purpose": "Current status assessment",
-            "importance": "Baseline for progress tracking",
-            "sensitivity": "Handled with care and privacy",
-            "flexibility": "Accepts various weight units",
-            "extract_hints": ["weigh", "kg", "lbs", "pounds", "kilos"]
+            "purpose": "Initial weight measurement",
+            "importance": "Baseline for progress tracking"
         }
     },
     "target_weight": {
         "required": True,
-        "type": "weight",
-        "context": {
-            "purpose": "Goal setting",
-            "importance": "Determines program direction",
-            "health_context": "Must be realistic and healthy",
-            "motivation": "Personal achievement target"
-        }
-    },
-    "goal_timeline_weeks": {
-        "required": True,
         "type": "number",
+        "min_value": 30,  # kg
+        "max_value": 300,  # kg
         "context": {
-            "purpose": "Progress planning",
-            "importance": "Affects daily targets and strategies",
-            "health_context": "Ensures safe weight change rate",
-            "flexibility": "Accepts various time formats",
-            "extract_hints": ["weeks", "months", "years", "by", "within", "around"]
+            "purpose": "Goal weight setting",
+            "importance": "Essential for plan development"
         }
     },
     "activity_level": {
         "required": True,
         "type": "text",
+        "options": ["sedentary", "light", "moderate", "active", "very_active"],
         "context": {
-            "purpose": "Energy expenditure assessment",
-            "importance": "Crucial for caloric needs calculation",
-            "lifestyle_context": "Considers daily routine and habits",
-            "extract_hints": ["sedentary", "active", "exercise", "work", "job", "sports", "walk", "run"]
+            "purpose": "Physical activity assessment",
+            "importance": "Critical for caloric needs calculation"
         }
     },
     "dietary_restrictions": {
         "required": False,
         "type": "text",
         "context": {
-            "purpose": "Meal plan customization",
-            "importance": "Ensures safe and appropriate food choices",
-            "cultural_context": "Respects religious and cultural preferences",
-            "health_context": "Addresses allergies and intolerances"
+            "purpose": "Dietary limitations and preferences",
+            "importance": "Important for meal planning"
         }
     },
     "health_conditions": {
         "required": False,
         "type": "text",
         "context": {
-            "purpose": "Safety and adaptation",
-            "importance": "Ensures program safety",
-            "medical_context": "Influences exercise and diet recommendations",
-            "privacy": "Handled with strict confidentiality"
-        }
-    },
-    "preferred_meals": {
-        "required": False,
-        "type": "number",
-        "context": {
-            "purpose": "Meal planning structure",
-            "importance": "Matches eating habits and schedule",
-            "lifestyle_context": "Accommodates daily routine",
-            "extract_hints": ["meals", "eat", "times", "per day", "snacks"]
-        }
-    },
-    "sleep_hours": {
-        "required": False,
-        "type": "number",
-        "context": {
-            "purpose": "Lifestyle assessment",
-            "importance": "Affects metabolism and recovery",
-            "health_context": "Influences eating patterns",
-            "extract_hints": ["sleep", "hours", "night", "bed", "rest"]
-        }
-    },
-    "stress_level": {
-        "required": False,
-        "type": "text",
-        "context": {
-            "purpose": "Lifestyle factor assessment",
-            "importance": "Affects eating habits and progress",
-            "health_context": "Influences program adaptations",
-            "extract_hints": ["stress", "anxiety", "relaxed", "busy", "overwhelmed"]
+            "purpose": "Medical considerations",
+            "importance": "Critical for safe recommendations"
         }
     }
 }
@@ -303,10 +281,10 @@ async def extract_field_value(field_name: str, text: str, lang_code: str = "en",
         field_type = field_info["type"]
         
         logger.info(f"Extracting field: {field_name} | Type: {field_type}")
-        logger.info(f"Input text: {text}")
+        logger.debug(f"Input text: {text}")
         
         # Get the last question asked to provide context
-        last_question = await db.get_last_assistant_message(user_profile["phone_number"])
+        last_question = db.get_last_assistant_message(user_profile["phone_number"])
         
         # Build the analyzer prompt
         system_prompt = """You are an expert data analyzer for a diet coaching app.
@@ -317,32 +295,39 @@ async def extract_field_value(field_name: str, text: str, lang_code: str = "en",
         - Field type: {type}
         - Language: {lang}
         - Last question asked: {question}
+        {options_str}
         
         Guidelines:
         1. Analyze both the question context and the user's response
         2. Consider cultural and linguistic nuances
         3. Extract ONLY the relevant value
-        4. Convert the response to the appropriate data type
+        4. Convert the response to the appropriate data type ({type})
         5. Validate the extracted value
+        6. If options are provided, match to the closest valid option
         
         Response Format:
-        Return a JSON object with these exact fields:
+        Return ONLY a valid JSON object with these exact fields:
         {{
-            "value": <extracted_value>,
+            "value": <extracted_value ({type})>,
             "confidence": <float between 0-1>,
             "normalized": <true/false>,
             "original_format": <string>
         }}
         
         Examples:
-        For name: {{"value": "John", "confidence": 1.0, "normalized": true, "original_format": "john"}}
-        For age: {{"value": 35, "confidence": 1.0, "normalized": true, "original_format": "35 ans"}}
-        For weight: {{"value": 75.5, "confidence": 1.0, "normalized": true, "original_format": "75,5 kg"}}
-        """.format(
+        For name (text): {{"value": "John", "confidence": 1.0, "normalized": true, "original_format": "john"}}
+        For age (number): {{"value": 35, "confidence": 1.0, "normalized": true, "original_format": "35 ans"}}
+        For gender (text): {{"value": "homme", "confidence": 1.0, "normalized": true, "original_format": "male"}}
+        
+        IMPORTANT: 
+        - Return ONLY the JSON object, no markdown formatting or additional text
+        - Ensure the value matches the required type: {type}
+        - If options are provided, value MUST be one of the valid options""".format(
             field=field_name,
             type=field_type,
             lang=lang_code,
-            question=last_question or "No previous question"
+            question=last_question or "No previous question",
+            options_str=f"\n- Valid options: {field_info['options']}" if "options" in field_info else ""
         )
         
         # Get the analyzer's response
@@ -352,15 +337,98 @@ async def extract_field_value(field_name: str, text: str, lang_code: str = "en",
         )
         
         try:
-            result = json.loads(analyzer_response)
-            
-            # Log the analysis results
-            logger.info(f"Analysis Result: {json.dumps(result, indent=2)}")
-            
-            if not result.get("value"):
-                logger.error("No value extracted from analyzer")
+            # Clean and parse the response
+            clean_response = clean_json_response(analyzer_response)
+            if not clean_response:
+                logger.error("Empty response after cleaning")
                 return None
-                
+            
+            # Log the cleaned response for debugging
+            logger.debug(f"Cleaned response before parsing: {clean_response}")
+            
+            # Parse the JSON response
+            result = json.loads(clean_response)
+            
+            # Validate required fields
+            required_fields = {"value", "confidence", "normalized", "original_format"}
+            if not all(field in result for field in required_fields):
+                logger.error(f"Missing required fields in response. Got: {list(result.keys())}")
+                return None
+            
+            # Validate confidence threshold
+            if result["confidence"] < 0.7:  # You can adjust this threshold
+                logger.warning(f"Low confidence ({result['confidence']}) for {field_name} extraction")
+                return None
+            
+            # Type-specific validation and conversion
+            if field_info["type"] == "number":
+                try:
+                    # Convert to float first to handle both integers and decimals
+                    value = float(result["value"])
+                    if not isinstance(value, (int, float)):
+                        logger.error(f"Invalid number format for {field_name}: {result['value']}")
+                        return None
+                    
+                    # Check for valid ranges if specified in field_info
+                    if "min_value" in field_info and value < field_info["min_value"]:
+                        logger.error(f"Value {value} below minimum {field_info['min_value']} for {field_name}")
+                        return None
+                    if "max_value" in field_info and value > field_info["max_value"]:
+                        logger.error(f"Value {value} above maximum {field_info['max_value']} for {field_name}")
+                        return None
+                        
+                    result["value"] = value
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error converting {field_name} to number: {str(e)}")
+                    return None
+                    
+            elif field_info["type"] == "text":
+                try:
+                    # Convert to string and clean
+                    value = str(result["value"]).strip().lower()
+                    
+                    # Check for empty string after cleaning
+                    if not value:
+                        logger.error(f"Empty text value for {field_name} after cleaning")
+                        return None
+                    
+                    # Validate against options if specified
+                    if "options" in field_info:
+                        if value not in field_info["options"]:
+                            logger.error(f"Invalid option for {field_name}: {value}. Must be one of: {field_info['options']}")
+                            return None
+                        
+                    # Check length constraints if specified
+                    if "max_length" in field_info and len(value) > field_info["max_length"]:
+                        logger.error(f"Text too long for {field_name}: {len(value)} > {field_info['max_length']}")
+                        return None
+                    if "min_length" in field_info and len(value) < field_info["min_length"]:
+                        logger.error(f"Text too short for {field_name}: {len(value)} < {field_info['min_length']}")
+                        return None
+                        
+                    result["value"] = value
+                except Exception as e:
+                    logger.error(f"Error processing text for {field_name}: {str(e)}")
+                    return None
+                    
+            elif field_info["type"] == "boolean":
+                try:
+                    # Handle boolean values
+                    if isinstance(result["value"], bool):
+                        value = result["value"]
+                    elif isinstance(result["value"], str):
+                        value = result["value"].lower() in ("yes", "true", "1", "y")
+                    else:
+                        logger.error(f"Invalid boolean format for {field_name}: {result['value']}")
+                        return None
+                    result["value"] = value
+                except Exception as e:
+                    logger.error(f"Error converting {field_name} to boolean: {str(e)}")
+                    return None
+            
+            # Log the validated and converted result
+            logger.info(f"Successfully extracted {field_name}: {json.dumps(result, indent=2)}")
+            
             # Return only the field value for database storage
             return {field_name: result["value"]}
             
@@ -370,7 +438,8 @@ async def extract_field_value(field_name: str, text: str, lang_code: str = "en",
             return None
             
     except Exception as e:
-        logger.error(f"Error in field extraction: {e}")
+        logger.error(f"Error in field extraction: {str(e)}")
+        logger.error("Stack trace:", exc_info=True)
         return None
 
 async def get_fallback_question(field_name: str, lang_code: str = DEFAULT_LANGUAGE) -> Tuple[str, str]:
@@ -403,9 +472,25 @@ async def get_fallback_question(field_name: str, lang_code: str = DEFAULT_LANGUA
         return field_name, f"Please provide your {field_name}."
 
 async def get_next_question(user_profile: dict, lang_code: str = DEFAULT_LANGUAGE) -> Tuple[str, str]:
-    """Generate the next personalized question based on user profile and context."""
-    # First check for missing required fields
-    for field_name, field_info in PROFILE_FIELDS.items():
+    """Generate the next personalized question based on user profile and context.
+    
+    Enforces mandatory field order to ensure a logical flow of questions.
+    """
+    # Define required field order
+    REQUIRED_ORDER = [
+        "language",
+        "name",
+        "age",
+        "gender",
+        "height",
+        "start_weight",
+        "target_weight",
+        "activity_level"
+    ]
+    
+    # First check for missing required fields in order
+    for field_name in REQUIRED_ORDER:
+        field_info = PROFILE_FIELDS[field_name]
         if field_info["required"] and (field_name not in user_profile or user_profile[field_name] is None):
             # Skip language field as it's handled separately
             if field_name == "language":
@@ -419,8 +504,10 @@ async def get_next_question(user_profile: dict, lang_code: str = DEFAULT_LANGUAG
             Generate a personalized question about {field_name}.
             
             Field Information:
+            - Type: {field_info["type"]}
             - Purpose: {context.get('purpose', '')}
             - Importance: {context.get('importance', '')}
+            {f'- Valid Options: {", ".join(field_info["options"])}' if "options" in field_info else ""}
             
             User Context:
             - Name: {name}
@@ -434,8 +521,11 @@ async def get_next_question(user_profile: dict, lang_code: str = DEFAULT_LANGUAG
             4. Encouraging and supportive
             5. Connected to their previous answers
             
-            If asking about measurements, clarify that any unit is acceptable.
-            If asking about sensitive information, emphasize that it's optional/private.
+            Guidelines:
+            - If asking about measurements, clarify that any unit is acceptable
+            - If asking about sensitive information, emphasize that it's private
+            - If the field has specific options, mention them clearly
+            - Keep the total response under 200 characters for WhatsApp
             
             IMPORTANT: Generate ONLY in {lang_code}. Do not include translations."""
             
@@ -452,6 +542,12 @@ async def get_next_question(user_profile: dict, lang_code: str = DEFAULT_LANGUAG
                 logger.error(f"Error generating question for {field_name}: {e}")
                 # Use the fallback question generator instead of hardcoded responses
                 return await get_fallback_question(field_name, lang_code)
+    
+    # Check for optional fields after all required fields are complete
+    for field_name, field_info in PROFILE_FIELDS.items():
+        if not field_info["required"] and field_name not in REQUIRED_ORDER:
+            if field_name not in user_profile or user_profile[field_name] is None:
+                return field_name, await generate_optional_question(field_name, user_profile, lang_code)
     
     return "complete", "Profile complete"
 
@@ -516,7 +612,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
         logger.info("=" * 50)
 
         # Get user profile and handle None case properly
-        user_profile = await db.get_user_profile(phone_number)
+        user_profile = db.get_user_profile(phone_number)
         logger.info(f"Retrieved user profile: {json.dumps(user_profile, indent=2) if user_profile else 'None'}")
         
         # Get user's language or use default
@@ -527,15 +623,15 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             logger.info(f"NEW USER DETECTED: {phone_number[-4:]}")
             
             # Create user profile
-            if not await db.create_user_profile(phone_number):
+            if not db.create_user_profile(phone_number):
                 logger.error("Failed to create user profile")
                 return await get_error_message("profile_creation_failed", user_lang)
             
             # Log messages
-            if not await db.log_message(phone_number, "user", incoming_text):
+            if not db.log_message(phone_number, "user", incoming_text):
                 logger.error("Failed to log user message")
             
-            if not await db.log_message(phone_number, "assistant", WELCOME_MESSAGE):
+            if not db.log_message(phone_number, "assistant", WELCOME_MESSAGE):
                 logger.error("Failed to log welcome message")
             
             logger.info("=" * 50)
@@ -545,7 +641,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             
             return WELCOME_MESSAGE
 
-        # Language detection flow - check both missing language and undefined language
+        # Language detection flow
         if "language" not in user_profile or user_profile.get("language") == "und":
             try:
                 logger.info("Processing language detection")
@@ -553,25 +649,25 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 detected_lang = detected_lang or "en"
                 logger.info(f"Detected language: {detected_lang}")
                 
-                # Store only the language and step (known database columns)
+                # Store only the language and step
                 updates = {
                     "language": detected_lang,
                     "step": "language_detected"
                 }
                 logger.info(f"Updating user profile with: {json.dumps(updates, indent=2)}")
                 
-                if not await db.update_user_profile(phone_number, updates):
+                if not db.update_user_profile(phone_number, updates):
                     logger.error(f"Failed to store language for user: {phone_number[-4:]}")
                     return await get_error_message("language_detection_failed", user_lang)
                 
-                # Generate and send the introduction (which now includes asking for their name)
+                # Generate and send the introduction
                 coach_intro = await get_coach_intro(detected_lang)
                 logger.info("=" * 50)
                 logger.info("SENDING COACH INTRO:")
                 logger.info(coach_intro)
                 logger.info("=" * 50)
                 
-                if not await db.log_message(phone_number, "assistant", coach_intro):
+                if not db.log_message(phone_number, "assistant", coach_intro):
                     logger.error("Failed to log coach intro")
                 
                 return coach_intro
@@ -580,31 +676,16 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.error(f"Error in language detection flow: {e}")
                 return await get_error_message("language_detection_failed", user_lang)
 
-        # Get next question before processing input
+        # Process current field
         current_field, next_question = await get_next_question(user_profile, user_profile.get("language", "en"))
         logger.info(f"Current field to fill: {current_field}")
         
         # If all required fields are complete, create the plan
         if current_field == "complete" and user_profile.get("step") != "chat":
             try:
-                # Double check all required fields are filled
-                missing_fields = [
-                    field for field, info in PROFILE_FIELDS.items()
-                    if info["required"] and (field not in user_profile or user_profile[field] is None)
-                ]
-                
-                if missing_fields:
-                    logger.info(f"Required fields still missing: {missing_fields}")
-                    # Get question for first missing field
-                    _, question = await get_next_question(
-                        {"language": user_profile["language"]}, 
-                        user_profile["language"]
-                    )
-                    return question
-                
                 # Generate and store the plan
                 plan = await create_diet_plan(user_profile)
-                if not await db.update_user_profile(phone_number, {
+                if not db.update_user_profile(phone_number, {
                     "step": "chat",
                     "plan": plan,
                     "plan_created_at": datetime.utcnow().isoformat()
@@ -619,7 +700,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.info(response)
                 logger.info("=" * 50)
                 
-                if not await db.log_message(phone_number, "assistant", response):
+                if not db.log_message(phone_number, "assistant", response):
                     logger.error("Failed to log plan message")
                 
                 return response
@@ -627,9 +708,12 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             except Exception as e:
                 logger.error(f"Error creating plan: {e}")
                 return await get_error_message("plan_creation_failed", user_lang)
-        
+
         # Process user input for the current field
         try:
+            # Get last question for context
+            last_question = db.get_last_assistant_message(phone_number)
+            
             field_value = await extract_field_value(
                 current_field, 
                 incoming_text,
@@ -641,12 +725,12 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             
             if field_value:
                 # Update the user profile with the new field value
-                if not await db.update_user_profile(phone_number, field_value):
+                if not db.update_user_profile(phone_number, field_value):
                     logger.error(f"Failed to store field value for user: {phone_number[-4:]}")
                     return await get_error_message("field_value_storage_failed", user_lang)
                 
                 # Refresh user profile after update
-                user_profile = await db.get_user_profile(phone_number)
+                user_profile = db.get_user_profile(phone_number)
                 if not user_profile:
                     logger.error("Failed to retrieve updated user profile")
                     return await get_error_message("user_profile_retrieval_failed", user_lang)
@@ -658,7 +742,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
                 logger.info(next_question)
                 logger.info("=" * 50)
                 
-                if not await db.log_message(phone_number, "assistant", next_question):
+                if not db.log_message(phone_number, "assistant", next_question):
                     logger.error("Failed to log question message")
                 
                 return next_question
@@ -671,7 +755,7 @@ async def process_incoming_message(phone_number: str, incoming_text: str) -> str
             logger.info(response)
             logger.info("=" * 50)
             
-            if not await db.log_message(phone_number, "assistant", response):
+            if not db.log_message(phone_number, "assistant", response):
                 logger.error("Failed to log clarification message")
             
             return response
@@ -713,3 +797,44 @@ async def create_diet_plan(user_profile: Dict[str, Any]) -> str:
     except Exception as e:
         logger.error(f"Error creating diet plan: {e}")
         return "Error creating plan. Please try again later."
+
+async def generate_optional_question(field_name: str, user_profile: dict, lang_code: str) -> str:
+    """Generate a question for optional fields with appropriate context and sensitivity."""
+    field_info = PROFILE_FIELDS[field_name]
+    context = field_info.get("context", {})
+    name = user_profile.get("name", "")
+    
+    system_prompt = f"""You are Eric, a caring diet coach having a natural conversation in {lang_code}.
+    Generate a question about an optional field: {field_name}.
+    
+    Field Information:
+    - Type: {field_info["type"]}
+    - Purpose: {context.get('purpose', '')}
+    - Importance: {context.get('importance', '')}
+    {f'- Valid Options: {", ".join(field_info["options"])}' if "options" in field_info else ""}
+    
+    User Context:
+    - Name: {name}
+    - Language: {lang_code}
+    
+    Guidelines:
+    1. Emphasize that this information is optional but helpful
+    2. Explain briefly why this information is valuable
+    3. Keep the tone gentle and non-pressuring
+    4. Use their name if available
+    5. Keep the total response under 200 characters
+    
+    IMPORTANT: Generate ONLY in {lang_code}. Do not include translations."""
+    
+    try:
+        question = await chat_completion(
+            system_prompt=system_prompt,
+            user_message=f"Generate a friendly optional question about {field_name} in {lang_code}"
+        )
+        
+        logger.info(f"Generated optional question for {field_name} in {lang_code}")
+        return question
+        
+    except Exception as e:
+        logger.error(f"Error generating optional question for {field_name}: {e}")
+        return f"Would you like to share any {field_name}? This is optional but helps me provide better recommendations."
